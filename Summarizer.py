@@ -10,26 +10,88 @@ import google.generativeai as genai
 class TranscriptProcessor:
     def __init__(self, api_key=None):
         """
-        Initialize TranscriptProcessor with Gemini API key
+        Initialize TranscriptProcessor with optional API key and comprehensive error handling
         
         Args:
-            api_key (str, optional): Gemini API key. Defaults to environment variable.
+            api_key (str, optional): Gemini API key. Defaults to None.
+        
+        Raises:
+            ValueError: If no API key is found or configuration fails
         """
-        # Use API key from parameter or environment variable
-        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
+        print("DEBUGGING SUMMARIZER: Initializing TranscriptProcessor")
         
-        if not self.api_key:
-            raise ValueError("Gemini API key is required")
+        try:
+            # Initialize logging with more detailed configuration
+            logging.basicConfig(
+                level=logging.DEBUG,
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                handlers=[
+                    logging.StreamHandler(),  # Console output
+                    logging.FileHandler('summarizer_debug.log', mode='a')  # File logging
+                ]
+            )
+            self.logger = logging.getLogger(__name__)
+            
+            # Set up Gemini API with multiple fallback methods
+            print("DEBUGGING SUMMARIZER: Setting up Gemini API")
+            
+            # Attempt to get API key from multiple sources
+            if not api_key:
+                # Priority 1: Passed argument
+                api_key = os.getenv('GEMINI_API_KEY')
+            
+            if not api_key:
+                # Priority 2: .env file
+                try:
+                    from dotenv import load_dotenv
+                    load_dotenv()
+                    api_key = os.getenv('GEMINI_API_KEY')
+                except ImportError:
+                    print("DEBUGGING SUMMARIZER: python-dotenv not installed")
+            
+            if not api_key:
+                # Priority 3: Configuration file
+                try:
+                    with open('.gemini_config.json', 'r') as config_file:
+                        config = json.load(config_file)
+                        api_key = config.get('api_key')
+                except FileNotFoundError:
+                    print("DEBUGGING SUMMARIZER: No .gemini_config.json found")
+                except json.JSONDecodeError:
+                    print("DEBUGGING SUMMARIZER: Invalid .gemini_config.json")
+            
+            if not api_key:
+                print("DEBUGGING SUMMARIZER: No API key found!")
+                raise ValueError("No Gemini API key provided. Check environment, .env, or config file.")
+            
+            # Validate API key format (basic check)
+            if len(api_key) < 10:
+                print("DEBUGGING SUMMARIZER: Invalid API key format")
+                raise ValueError("API key appears to be malformed")
+            
+            # Configure Gemini with extensive error handling
+            try:
+                genai.configure(api_key=api_key)
+                print("DEBUGGING SUMMARIZER: Gemini API configured successfully")
+                
+                # Verify API configuration
+                try:
+                    test_model = genai.GenerativeModel('gemini-pro')
+                    test_response = test_model.generate_content("Test API configuration")
+                    print("DEBUGGING SUMMARIZER: API configuration test successful")
+                except Exception as test_error:
+                    print(f"DEBUGGING SUMMARIZER: API configuration test failed - {test_error}")
+                    raise
+            
+            except Exception as config_error:
+                print(f"DEBUGGING SUMMARIZER: Gemini API configuration error - {config_error}")
+                raise
         
-        # Configure Gemini API
-        genai.configure(api_key=self.api_key)
-        
-        # Set up logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s: %(message)s'
-        )
-        self.logger = logging.getLogger(__name__)
+        except Exception as e:
+            print(f"DEBUGGING SUMMARIZER: Initialization Error - {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def extract_transcript(self, video_id):
         """
@@ -101,135 +163,122 @@ class TranscriptProcessor:
             traceback.print_exc()
             return None
 
-    def generate_summary(self, transcript, max_length=2000):
+    def generate_summary(self, transcript):
         """
-        Generate summary using Gemini AI with a comprehensive trading analysis approach
+        Generate a summary of the transcript using Gemini AI with extensive logging and error handling
         
         Args:
-            transcript (str): Full video transcript
-            max_length (int, optional): Maximum summary length. Defaults to 2000.
+            transcript (str): Full transcript text
         
         Returns:
-            str: Generated summary with market snapshot and trading strategy analysis
+            str or None: Generated summary or None if generation fails
         """
-        if not transcript:
-            return "No transcript available for summarization."
+        print("DEBUGGING SUMMARY: Starting summary generation")
         
         try:
-            model = genai.GenerativeModel('gemini-pro')
-            prompt = f"""Output MUST be in TWO PARTS:
-
-Part 1: Current Market Snapshot
-
-Part 2: Comprehensive Trading Strategy Analysis
-
-No exceptions: If the video lacks content for one part, still generate both sections with whatever is available.
-
-Step 1: Analyze the Video Content
-
-Read the entire video transcript carefully.
-
-Identify and mark sections that mention:
-
-Market conditions, sentiment, trends, momentum, key price levels, liquidity zones, macro events, or time-sensitive information.
-
-Trading indicators, tools, methods, entry/exit rules, stop-losses, risk management, and other detailed trading strategy components.
-
-Step 2: Extract and Organize Information
-
-For Part 1 (Current Market Snapshot):
-
-Extract only explicit, time-sensitive information from the video.
-
-Include:
-
-Market sentiment (e.g., extreme greed, fear).
-
-Trends (e.g., bullish, bearish, consolidation).
-
-Momentum (e.g., higher highs, pullbacks).
-
-Key price levels (e.g., support, resistance).
-
-Liquidity zones (e.g., order book data, CME gaps).
-
-Macro trends/events (e.g., Federal Reserve actions, economic data).
-
-Do not include generic market commentary or assumptions.
-
-For Part 2 (Comprehensive Trading Strategy Analysis):
-
-Extract every explicit mention of trading indicators, tools, methods, and rules from the video.
-
-Include:
-
-Indicators and Tools: Exact rules, calculations, and interpretations (e.g., RSI, MACD, Fibonacci extensions).
-
-Key Levels and Zones: How they're defined, confirmed, and used (e.g., support/resistance, liquidity zones).
-
-Trading Rules: Entries, exits, stop-losses, and position sizing (e.g., "buy above 104k with RSI confirmation").
-
-Risk Management: Risk tolerance, profit protection, and psychological frameworks (e.g., "risk no more than 2% per trade").
-
-Do not include generic trading strategies or assumptions.
-
-Step 3: Structure the Output
-
-Part 1: Current Market Snapshot
-
-Present the extracted content in bullet points or short paragraphs.
-
-Ensure no overlap with Part 2.
-
-Part 2: Comprehensive Trading Strategy Analysis
-
-Present the extracted content in bullet points or short paragraphs.
-
-Use clear headings for each category (e.g., Indicators and Tools, Key Levels and Zones, Trading Rules, Risk Management).
-
-Ensure no overlap with Part 1.
-
-Step 4: Quality Control
-
-Double-check: Ensure only information explicitly mentioned in the video is included.
-
-Remove generic content: Exclude any market or trading commentary not directly discussed in the video.
-
-Flag gaps: If no explicit details exist for a section, clearly note that only minimal or no direct content was available.
-
-Video Transcript:
-{transcript}
-"""
+            # Validate transcript
+            if not transcript or not isinstance(transcript, str):
+                print("DEBUGGING SUMMARY: Invalid or empty transcript")
+                return None
             
-            response = model.generate_content(prompt)
-            return response.text
+            print(f"DEBUGGING SUMMARY: Transcript length: {len(transcript)} characters")
+            
+            # Truncate very long transcripts to avoid API limits
+            max_transcript_length = 10000  # Adjust based on API limits
+            if len(transcript) > max_transcript_length:
+                print(f"DEBUGGING SUMMARY: Truncating transcript from {len(transcript)} to {max_transcript_length} characters")
+                transcript = transcript[:max_transcript_length]
+            
+            # Prepare prompt for summary generation
+            summary_prompt = f"""
+            Please generate a concise, informative summary of the following transcript. 
+            Focus on the key points, main ideas, and most important information.
+            Aim for a summary that captures the essence of the content in about 3-5 sentences.
+
+            Transcript:
+            {transcript}
+            """
+            
+            try:
+                # Configure Gemini model for summarization
+                model = genai.GenerativeModel('gemini-pro')
+                
+                print("DEBUGGING SUMMARY: Generating summary with Gemini AI")
+                response = model.generate_content(summary_prompt)
+                
+                # Check response
+                if not response or not response.text:
+                    print("DEBUGGING SUMMARY: Empty response from Gemini AI")
+                    return None
+                
+                summary = response.text.strip()
+                
+                print(f"DEBUGGING SUMMARY: Generated summary. Length: {len(summary)} characters")
+                print(f"DEBUGGING SUMMARY: Summary preview: {summary[:500]}...")
+                
+                return summary
+            
+            except Exception as generation_error:
+                print(f"DEBUGGING SUMMARY: Summary generation error - {generation_error}")
+                import traceback
+                traceback.print_exc()
+                return None
+        
         except Exception as e:
-            self.logger.error(f"Error generating summary: {e}")
-            return "Failed to generate summary."
+            print(f"DEBUGGING SUMMARY: Unexpected error in summary generation - {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def process_video(self, video_id):
         """
-        Full video processing workflow
+        Process a single video by extracting transcript and generating summary
         
         Args:
-            video_id (str): YouTube video ID
+            video_id (str): YouTube video ID to process
         
         Returns:
-            dict: Processing results with transcript and summary
+            bool: True if processing was successful, False otherwise
         """
-        self.logger.info(f"Processing video: {video_id}")
+        print(f"DEBUGGING PROCESS_VIDEO: Starting video processing for ID: {video_id}")
         
-        # Extract transcript
-        transcript = self.extract_transcript(video_id)
+        try:
+            # Transcript Extraction
+            print("DEBUGGING PROCESS_VIDEO: Attempting transcript extraction")
+            transcript = self.extract_transcript(video_id)
+            
+            if not transcript:
+                print(f"DEBUGGING PROCESS_VIDEO: Failed to extract transcript for video {video_id}")
+                return False
+            
+            print(f"DEBUGGING PROCESS_VIDEO: Transcript extracted successfully. Length: {len(transcript)} characters")
+            
+            # Summary Generation
+            print("DEBUGGING PROCESS_VIDEO: Attempting summary generation")
+            summary = self.generate_summary(transcript)
+            
+            if not summary:
+                print(f"DEBUGGING PROCESS_VIDEO: Failed to generate summary for video {video_id}")
+                return False
+            
+            print(f"DEBUGGING PROCESS_VIDEO: Summary generated successfully. Length: {len(summary)} characters")
+            print(f"DEBUGGING PROCESS_VIDEO: Summary preview: {summary[:500]}...")
+            
+            # Optional: Cloud Storage Upload (placeholder)
+            print("DEBUGGING PROCESS_VIDEO: Simulating cloud storage upload")
+            
+            print(f"DEBUGGING PROCESS_VIDEO: Successfully processed video {video_id}")
+            return True
         
-        # Generate summary
-        summary = self.generate_summary(transcript) if transcript else None
-        
-        return {
-            'video_id': video_id,
-            'transcript': transcript,
-            'summary': summary
-        }
+        except Exception as e:
+            print(f"DEBUGGING PROCESS_VIDEO: Unexpected error processing video {video_id} - {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def upload_summary_to_cloud_storage(self, video_id, summary):
+        # TO DO: Implement cloud storage upload logic
+        pass
 
 def youtube_webhook(request):
     """
