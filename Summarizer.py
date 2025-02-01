@@ -33,42 +33,72 @@ class TranscriptProcessor:
 
     def extract_transcript(self, video_id):
         """
-        Extract transcript from a YouTube video
+        Extract transcript from a YouTube video with extensive error handling and logging
         
         Args:
             video_id (str): YouTube video ID
         
         Returns:
-            str: Full transcript text
+            str or None: Full transcript text or None if extraction fails
         """
+        print(f"DEBUGGING TRANSCRIPT: Attempting to extract transcript for video ID: {video_id}")
+        
         try:
-            # Fetch transcripts for the video
+            # Attempt to fetch transcripts
+            print("DEBUGGING TRANSCRIPT: Using YouTubeTranscriptApi to fetch transcript")
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
-            # Try to find a manually created transcript
+            # Prioritize languages
+            preferred_languages = ['en', 'en-US', 'en-GB']
+            
+            # Try to find a transcript
+            transcript = None
+            
+            # First, try manually created transcripts
             try:
-                transcript = transcript_list.find_manually_created_transcript(['en'])
-                self.logger.info(f"Found manually created transcript for video {video_id}")
-            except Exception:
-                # If no manual transcript, try generated transcript
+                transcript = transcript_list.find_manually_created_transcript(preferred_languages)
+                print("DEBUGGING TRANSCRIPT: Found manually created transcript")
+            except Exception as manual_error:
+                print(f"DEBUGGING TRANSCRIPT: No manually created transcript - {manual_error}")
+            
+            # If no manual transcript, try generated transcripts
+            if not transcript:
                 try:
-                    transcript = transcript_list.find_generated_transcript(['en'])
-                    self.logger.info(f"Found generated transcript for video {video_id}")
-                except Exception:
-                    # If no transcript found, raise an error
-                    self.logger.error(f"No transcript found for video {video_id}")
+                    transcript = transcript_list.find_generated_transcript(preferred_languages)
+                    print("DEBUGGING TRANSCRIPT: Found generated transcript")
+                except Exception as generated_error:
+                    print(f"DEBUGGING TRANSCRIPT: No generated transcript - {generated_error}")
+            
+            # If still no transcript, try the first available transcript
+            if not transcript:
+                try:
+                    transcript = transcript_list.transcripts[0]
+                    print("DEBUGGING TRANSCRIPT: Using first available transcript")
+                except Exception as first_error:
+                    print(f"DEBUGGING TRANSCRIPT: No transcripts available - {first_error}")
                     return None
             
             # Extract full transcript text
             full_transcript = ' '.join([entry['text'] for entry in transcript.fetch()])
             
+            # Check if transcript is empty
+            if not full_transcript:
+                print("DEBUGGING TRANSCRIPT: Extracted transcript is empty")
+                return None
+            
+            print(f"DEBUGGING TRANSCRIPT: Transcript extracted successfully. Length: {len(full_transcript)} characters")
+            print(f"DEBUGGING TRANSCRIPT: First 500 characters: {full_transcript[:500]}...")
+            
             return full_transcript
         
         except TranscriptsDisabled:
-            self.logger.error(f"Transcripts are disabled for video {video_id}")
+            print(f"DEBUGGING TRANSCRIPT: Transcripts are disabled for video {video_id}")
             return None
-        except Exception as e:
-            self.logger.error(f"Error extracting transcript for video {video_id}: {e}")
+        
+        except Exception as retrieval_error:
+            print(f"DEBUGGING TRANSCRIPT: Unexpected transcript retrieval error - {retrieval_error}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def generate_summary(self, transcript, max_length=2000):

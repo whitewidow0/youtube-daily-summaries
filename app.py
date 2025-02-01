@@ -49,7 +49,7 @@ def verify_webhook_token(token):
 @app.route('/youtube_webhook', methods=['GET', 'POST'])
 def youtube_webhook():
     if request.method == 'POST':
-        webhook_token = request.headers.get('X-Webhook-Token')
+        webhook_token = request.headers.get('X-Render-Webhook-Secret')
         if not verify_webhook_token(webhook_token):
             return jsonify({"status": "error", "message": "Unauthorized"}), 403
 
