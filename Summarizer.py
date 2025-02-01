@@ -42,9 +42,31 @@ class TranscriptProcessor:
             str: Full transcript text
         """
         try:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id)
-            full_text = ' '.join([entry['text'] for entry in transcript])
-            return full_text
+            # Fetch transcripts for the video
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            
+            # Try to find a manually created transcript
+            try:
+                transcript = transcript_list.find_manually_created_transcript(['en'])
+                self.logger.info(f"Found manually created transcript for video {video_id}")
+            except Exception:
+                # If no manual transcript, try generated transcript
+                try:
+                    transcript = transcript_list.find_generated_transcript(['en'])
+                    self.logger.info(f"Found generated transcript for video {video_id}")
+                except Exception:
+                    # If no transcript found, raise an error
+                    self.logger.error(f"No transcript found for video {video_id}")
+                    return None
+            
+            # Extract full transcript text
+            full_transcript = ' '.join([entry['text'] for entry in transcript.fetch()])
+            
+            return full_transcript
+        
+        except TranscriptsDisabled:
+            self.logger.error(f"Transcripts are disabled for video {video_id}")
+            return None
         except Exception as e:
             self.logger.error(f"Error extracting transcript for video {video_id}: {e}")
             return None
