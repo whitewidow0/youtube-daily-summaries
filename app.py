@@ -162,42 +162,13 @@ def youtube_webhook():
         }), 500
 
 def process_video(video_id):
-    """
-    Process a video by extracting transcript and generating summary
-    Always returns True to continue processing
-    """
-    print(f"DEBUGGING PROCESS_VIDEO: Starting processing for video ID: {video_id}")
-    
-    try:
-        # Initialize TranscriptProcessor with extensive logging
-        print("DEBUGGING PROCESS_VIDEO: Initializing TranscriptProcessor")
-        processor = TranscriptProcessor()
-        
-        # Transcript extraction
-        transcript = None
-        try:
-            transcript = processor.extract_transcript(video_id)
-            print(f"DEBUGGING PROCESS_VIDEO: Transcript extracted. Length: {len(transcript) if transcript else 0} characters")
-        except Exception as transcript_error:
-            print(f"DEBUGGING PROCESS_VIDEO: Transcript Extraction Error - {transcript_error}")
-        
-        # Summary generation
-        summary = None
-        try:
-            if transcript:
-                summary = processor.generate_summary(transcript)
-                print(f"DEBUGGING PROCESS_VIDEO: Summary generated. Length: {len(summary) if summary else 0} characters")
-            else:
-                print("DEBUGGING PROCESS_VIDEO: No transcript available for summary generation")
-        except Exception as summary_error:
-            print(f"DEBUGGING PROCESS_VIDEO: Summary Generation Error - {summary_error}")
-        
-        # Always return True to continue processing
-        return True
-    
-    except Exception as e:
-        print(f"DEBUGGING PROCESS_VIDEO: Unexpected Error - {e}")
-        return True
+    logging.info(f"Processing video: {video_id}")
+    processor = TranscriptProcessor()
+    transcript = processor.extract_transcript(video_id)
+    logging.info(f"Transcript length: {len(transcript)} characters")
+    summary = processor.generate_summary(transcript)
+    logging.info(f"Summary length: {len(summary)} characters")
+    return True
 
 @app.route('/', methods=['GET'])
 def health_check():
