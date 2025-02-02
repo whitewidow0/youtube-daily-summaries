@@ -49,27 +49,21 @@ class CloudStorageManager:
             logging.error(f"Error initializing Cloud Storage: {e}")
             raise
     
-    def upload_summary(self, summary, video_id, channel_id, video_title, channel_name):
+    def upload_summary(self, summary, filename=None):
         """
-        Upload summary to Google Cloud Storage with a more descriptive filename
+        Upload summary to Google Cloud Storage
         
         Args:
             summary (str): Summary text to upload
-            video_id (str): YouTube video ID
-            channel_id (str): YouTube channel ID
-            video_title (str): Title of the video
-            channel_name (str): Name of the channel
+            filename (str, optional): Custom filename. If not provided, a default will be generated.
+        
+        Returns:
+            str: Public URL of the uploaded summary
         """
-        # Sanitize filename by removing special characters and replacing spaces
-        def sanitize_filename(name):
-            return ''.join(c if c.isalnum() or c in [' ', '_'] else '_' for c in name).rstrip()
-        
-        # Generate a unique and descriptive filename
-        sanitized_channel_name = sanitize_filename(channel_name)
-        sanitized_video_title = sanitize_filename(video_title)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"summaries/{channel_id}/{sanitized_channel_name}_{sanitized_video_title}_summary.txt"
+        # If no filename provided, use a timestamp-based default
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"summaries/summary_{timestamp}.txt"
         
         try:
             blob = self.bucket.blob(filename)
@@ -172,9 +166,6 @@ if __name__ == "__main__":
     sample_summary = "This is a test summary about an important YouTube video."
     url = storage_manager.upload_summary(
         summary=sample_summary, 
-        video_id='test_video_id', 
-        channel_id='test_channel_id',
-        video_title='Test Video Title',
-        channel_name='Test Channel Name'
+        filename='test_summary.txt'
     )
     print(f"Uploaded summary URL: {url}")
