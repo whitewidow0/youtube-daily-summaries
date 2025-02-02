@@ -39,8 +39,55 @@ def verify_webhook_token(token):
     expected_token = os.getenv('WEBHOOK_SECRET')
     return token == expected_token
 
-@app.route('/youtube_webhook', methods=['POST'])
 @app.route('/webhook', methods=['POST'])
+def webhook():
+    start_time = time.time()
+    
+    try:
+        # Log request metadata
+        logging.info(f"Webhook request method: {request.method}")
+        logging.info(f"Client IP: {request.remote_addr}")
+        
+        # Get and log the raw data
+        data = request.get_json()
+        logging.info(f"Received full Pub/Sub message: {json.dumps(data, indent=2)}")
+
+        # Extract video ID with more detailed logging
+        video_id = data.get("videoId") or data.get("videoUrl")
+        
+        if not video_id:
+            logging.warning("No video ID or URL could be extracted from the message")
+            logging.warning(f"Message keys: {list(data.keys())}")
+            return "No video ID", 400
+
+        # Log processing attempt
+        logging.info(f"Attempting to process video with ID/URL: {video_id}")
+
+        # Process the video
+        processed = process_video(video_id)
+        
+        # Log processing result
+        if processed:
+            processing_time = time.time() - start_time
+            logging.info(json.dumps({
+                "event": "video_processed_successfully",
+                "video_id": video_id,
+                "processing_time": f"{processing_time:.2f} seconds"
+            }))
+            return "Success", 200
+        else:
+            logging.warning(f"Failed to process video with ID/URL: {video_id}")
+            return jsonify({"status": "error", "video_id": video_id, "message": "Failed to process video"}), 400
+
+    except Exception as e:
+        # Detailed error logging without blocking
+        logging.error(f"Error processing webhook", extra={
+            "error_type": type(e).__name__,
+            "error_details": str(e)
+        })
+        return "Error", 500
+
+@app.route('/youtube_webhook', methods=['POST'])
 def youtube_webhook():
     """
     Webhook endpoint for processing YouTube video notifications.
@@ -49,7 +96,7 @@ def youtube_webhook():
     try:
         # Log the entire raw message for debugging
         raw_data = request.get_data()
-        logging.debug(f"Received raw webhook data: {raw_data}")
+        logging.debug(f"Received raw webhook data: {raw_data.decode('utf-8')}")
 
         # Skip processing if message is empty
         if not raw_data:
@@ -70,6 +117,8 @@ def youtube_webhook():
             if video_url:
                 video_id = extract_video_id(video_url)
                 logging.info(f"Extracted video URL: {video_url}")
+            else:
+                logging.warning("No videoUrl found in JSON message")
 
         # Check if it's an XML payload
         elif raw_data:
@@ -109,52 +158,6 @@ def youtube_webhook():
         logging.error(f"Error processing webhook: {e}")
         logging.error(traceback.format_exc())
         return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    start_time = time.time()
-    
-    try:
-        # Log request metadata
-        logging.info(f"Webhook request method: {request.method}")
-        logging.info(f"Client IP: {request.remote_addr}")
-        
-        # Get and log the raw data
-        data = request.get_json()
-        logging.info(f"Received raw Pub/Sub message: {data}")
-
-        # Extract video ID
-        video_id = data.get("videoId")
-        if not video_id:
-            logging.warning("No video ID could be extracted from the message")
-            return "No video ID", 400
-
-        # Log processing attempt
-        logging.info(f"Attempting to process video with ID: {video_id}")
-
-        # Process the video
-        processed = process_video(video_id)
-        
-        # Log processing result
-        if processed:
-            processing_time = time.time() - start_time
-            logging.info(json.dumps({
-                "event": "video_processed_successfully",
-                "video_id": video_id,
-                "processing_time": f"{processing_time:.2f} seconds"
-            }))
-            return "Success", 200
-        else:
-            logging.warning(f"Failed to process video with ID: {video_id}")
-            return jsonify({"status": "error", "video_id": video_id, "message": "Failed to process video"}), 400
-
-    except Exception as e:
-        # Detailed error logging without blocking
-        logging.error(f"Error processing webhook", extra={
-            "error_type": type(e).__name__,
-            "error_details": str(e)
-        })
-        return "Error", 500
 
 def listen_for_pubsub_messages(project_id, subscription_id):
     """Listen for messages from Google Cloud Pub/Sub and trigger processing"""
