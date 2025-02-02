@@ -20,9 +20,9 @@ load_dotenv()
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Log all messages
     format='%(asctime)s - %(levelname)s: %(message)s',
-    handlers=[logging.FileHandler('youtube_webhook.log'), logging.StreamHandler(sys.stdout)]
+    handlers=[logging.FileHandler('C:\\Users\\Boris Lap\\youtube_webhook.log'), logging.StreamHandler(sys.stdout)]
 )
 
 # Initialize summarizer with Gemini API key and YouTube API key from environment
