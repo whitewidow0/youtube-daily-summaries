@@ -4,6 +4,7 @@ import json
 import base64
 import logging
 import traceback
+import time
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from googleapiclient.discovery import build
@@ -12,7 +13,6 @@ from Summarizer import TranscriptProcessor
 from cloud_storage import CloudStorageManager
 import xml.etree.ElementTree as ET
 import re
-import time
 import threading
 
 # Load environment variables
@@ -109,6 +109,52 @@ def youtube_webhook():
         logging.error(f"Error processing webhook: {e}")
         logging.error(traceback.format_exc())
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    start_time = time.time()
+    
+    try:
+        # Log request metadata
+        logging.info(f"Webhook request method: {request.method}")
+        logging.info(f"Client IP: {request.remote_addr}")
+        
+        # Get and log the raw data
+        data = request.get_json()
+        logging.info(f"Received raw Pub/Sub message: {data}")
+
+        # Extract video ID
+        video_id = data.get("videoId")
+        if not video_id:
+            logging.warning("No video ID could be extracted from the message")
+            return "No video ID", 400
+
+        # Log processing attempt
+        logging.info(f"Attempting to process video with ID: {video_id}")
+
+        # Process the video
+        processed = process_video(video_id)
+        
+        # Log processing result
+        if processed:
+            processing_time = time.time() - start_time
+            logging.info(json.dumps({
+                "event": "video_processed_successfully",
+                "video_id": video_id,
+                "processing_time": f"{processing_time:.2f} seconds"
+            }))
+            return "Success", 200
+        else:
+            logging.warning(f"Failed to process video with ID: {video_id}")
+            return jsonify({"status": "error", "video_id": video_id, "message": "Failed to process video"}), 400
+
+    except Exception as e:
+        # Detailed error logging without blocking
+        logging.error(f"Error processing webhook", extra={
+            "error_type": type(e).__name__,
+            "error_details": str(e)
+        })
+        return "Error", 500
 
 def listen_for_pubsub_messages(project_id, subscription_id):
     """Listen for messages from Google Cloud Pub/Sub and trigger processing"""
