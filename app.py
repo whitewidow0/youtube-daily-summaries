@@ -40,6 +40,7 @@ def verify_webhook_token(token):
     return token == expected_token
 
 @app.route('/youtube_webhook', methods=['POST'])
+@app.route('/webhook', methods=['POST'])
 def youtube_webhook():
     """
     Webhook endpoint for processing YouTube video notifications.
