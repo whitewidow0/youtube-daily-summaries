@@ -47,20 +47,34 @@ def youtube_webhook():
     Supports both XML payload and JSON Pub/Sub messages.
     """
     try:
+        # Log the entire raw message for debugging
+        raw_data = request.get_data()
+        logging.debug(f"Received raw webhook data: {raw_data}")
+
+        # Skip processing if message is empty
+        if not raw_data:
+            logging.info("Received empty webhook message")
+            return '', 200
+
         video_id = None
 
         # Check if it's a Pub/Sub JSON message
         if request.is_json:
             logging.info("Processing JSON Pub/Sub message")
             message_data = request.get_json()
+            
+            # Log the full message data for debugging
+            logging.debug(f"Full JSON message: {message_data}")
+            
             video_url = message_data.get('videoUrl')
             if video_url:
                 video_id = extract_video_id(video_url)
+                logging.info(f"Extracted video URL: {video_url}")
 
         # Check if it's an XML payload
-        elif request.data:
+        elif raw_data:
             logging.info("Processing XML payload")
-            xml_data = request.data
+            xml_data = raw_data
             root = ET.fromstring(xml_data)
             namespaces = {
                 'atom': 'http://www.w3.org/2005/Atom',
@@ -77,9 +91,10 @@ def youtube_webhook():
                     video_id = extract_id(video_id_element.text)
                     break
 
+        # Skip processing if no video ID could be extracted
         if not video_id:
-            logging.warning("No video ID could be extracted")
-            return jsonify({"status": "error", "message": "Unable to extract video ID"}), 400
+            logging.warning("No video ID could be extracted from the message")
+            return '', 200
 
         logging.info(f"Processing video with ID: {video_id}")
         processed = process_video(video_id)
@@ -87,10 +102,12 @@ def youtube_webhook():
         if processed:
             return jsonify({"status": "success", "video_id": video_id, "message": "Video processed successfully"}), 200
         else:
+            logging.warning(f"Failed to process video with ID: {video_id}")
             return jsonify({"status": "error", "video_id": video_id, "message": "Failed to process video"}), 400
 
     except Exception as e:
         logging.error(f"Error processing webhook: {e}")
+        logging.error(traceback.format_exc())
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def listen_for_pubsub_messages(project_id, subscription_id):
