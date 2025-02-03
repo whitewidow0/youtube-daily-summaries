@@ -14,6 +14,7 @@ from cloud_storage import CloudStorageManager
 import xml.etree.ElementTree as ET
 import re
 import threading
+import xmltodict
 
 # Load environment variables
 load_dotenv()
@@ -39,56 +40,74 @@ def verify_webhook_token(token):
     expected_token = os.getenv('WEBHOOK_SECRET')
     return token == expected_token
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    start_time = time.time()
-    
-    try:
-        # Log request metadata
-        logging.info(f"Webhook request method: {request.method}")
-        logging.info(f"Client IP: {request.remote_addr}")
+@app.route('/webhook', methods=['GET', 'POST'])
+def youtube_webhook():
+    """
+    Webhook endpoint for WebSub notifications and verification.
+    Strictly follows WebSub specification for verification.
+    """
+    # WebSub Verification Challenge (GET request)
+    if request.method == 'GET':
+        # Extract WebSub verification parameters
+        hub_mode = request.args.get('hub.mode')
+        hub_topic = request.args.get('hub.topic')
+        hub_challenge = request.args.get('hub.challenge')
+        hub_lease_seconds = request.args.get('hub.lease_seconds')
+
+        # Logging for debugging
+        logging.info(f"WebSub Verification Request:")
+        logging.info(f"Mode: {hub_mode}")
+        logging.info(f"Topic: {hub_topic}")
+        logging.info(f"Challenge: {hub_challenge}")
+        logging.info(f"Lease Seconds: {hub_lease_seconds}")
+
+        # Strict validation as per WebSub spec
+        if (hub_mode in ['subscribe', 'unsubscribe'] and 
+            hub_topic and 
+            hub_challenge):
+            # Respond exactly as specified in the spec
+            logging.info("WebSub verification challenge accepted")
+            return hub_challenge, 200
         
-        # Get and log the raw data
-        data = request.get_json()
-        logging.info(f"Received full Pub/Sub message: {json.dumps(data, indent=2)}")
+        # If validation fails, return 404 as per spec
+        logging.error("Invalid WebSub verification request")
+        return 'Verification Failed', 404
 
-        # Extract video ID with more detailed logging
-        video_id = data.get("videoId") or data.get("videoUrl")
-        
-        if not video_id:
-            logging.warning("No video ID or URL could be extracted from the message")
-            logging.warning(f"Message keys: {list(data.keys())}")
-            return "No video ID", 400
+    # WebSub Notification Handling (POST request)
+    elif request.method == 'POST':
+        try:
+            # Log raw request details for debugging
+            logging.info(f"Notification Headers: {dict(request.headers)}")
+            logging.info(f"Notification Content Type: {request.content_type}")
+            
+            # Get raw request body
+            raw_body = request.get_data()
+            logging.info(f"Raw Notification Body: {raw_body.decode('utf-8', errors='ignore')}")
+            
+            # Parse XML notification
+            feed = xmltodict.parse(raw_body)
+            logging.info(f"Parsed Feed: {feed}")
+            
+            # Extract video ID and process
+            if 'feed' in feed and 'entry' in feed['feed']:
+                entry = feed['feed']['entry']
+                video_id = entry.get('yt:videoId', '')
+                
+                if video_id:
+                    # Process the video
+                    process_video(video_id)
+                    return 'Notification Processed', 200
+                else:
+                    logging.warning("No video ID found in notification")
+                    return 'No Video ID', 400
 
-        # Log processing attempt
-        logging.info(f"Attempting to process video with ID/URL: {video_id}")
-
-        # Process the video
-        processed = process_video(video_id)
-        
-        # Log processing result
-        if processed:
-            processing_time = time.time() - start_time
-            logging.info(json.dumps({
-                "event": "video_processed_successfully",
-                "video_id": video_id,
-                "processing_time": f"{processing_time:.2f} seconds"
-            }))
-            return "Success", 200
-        else:
-            logging.warning(f"Failed to process video with ID/URL: {video_id}")
-            return jsonify({"status": "error", "video_id": video_id, "message": "Failed to process video"}), 400
-
-    except Exception as e:
-        # Detailed error logging without blocking
-        logging.error(f"Error processing webhook", extra={
-            "error_type": type(e).__name__,
-            "error_details": str(e)
-        })
-        return "Error", 500
+        except Exception as e:
+            logging.error(f"Webhook Processing Error: {e}")
+            logging.error(traceback.format_exc())
+            return 'Processing Error', 500
 
 @app.route('/youtube_webhook', methods=['GET', 'POST'])
-def youtube_webhook():
+def youtube_webhook_legacy():
     """
     Webhook endpoint for WebSub notifications and verification.
     Supports verification challenge and video upload notifications.
