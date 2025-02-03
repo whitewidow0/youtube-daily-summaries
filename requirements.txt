@@ -1,1 +1,6 @@
 requests
+flask
+google-cloud-pubsub
+google-api-python-client
+python-dotenv
+gunicorn
