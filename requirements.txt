@@ -4,3 +4,4 @@ google-cloud-pubsub
 google-api-python-client
 python-dotenv
 gunicorn
+youtube_transcript_api
