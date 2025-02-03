@@ -66,16 +66,26 @@ def require_webhook_auth(f):
         return f(*args, **kwargs)
     return decorated_function
 
-@app.route('/webhook', methods=['POST'])
+@app.route('/webhook', methods=['POST', 'HEAD'])
 def youtube_webhook():
     """
     Webhook endpoint for Superfeedr notifications.
     Processes YouTube video notifications from JSON payload.
+    Supports HEAD requests for health checks.
     """
+    # Handle HEAD requests (often used for health checks)
+    if request.method == 'HEAD':
+        return '', 200
+
     try:
-        # Parse incoming JSON payload
+        # Receive full payload
         payload = request.get_json()
         
+        # Log EVERYTHING for inspection
+        logging.warning("FULL SUPERFEEDR PAYLOAD:")
+        logging.warning(json.dumps(payload, indent=2))
+        
+        # Parse incoming JSON payload
         # Log the entire payload for debugging
         logging.info(f"Received Superfeedr payload: {payload}")
         
