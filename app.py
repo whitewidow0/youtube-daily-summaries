@@ -32,14 +32,18 @@ def extract_video_id(href):
     
     return None
 
-@app.route('/youtube_webhook', methods=['POST'])
+@app.route('/webhook', methods=['HEAD', 'POST'])
 def youtube_webhook():
     """
     Webhook endpoint for processing YouTube video notifications
+    Supports both HEAD and POST methods
     
     Returns:
-        JSON response with video details or error
+        JSON response with video details or error, or 200 OK for HEAD
     """
+    if request.method == 'HEAD':
+        return '', 200
+    
     try:
         payload = request.json
         
