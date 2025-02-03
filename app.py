@@ -6,7 +6,7 @@ import logging
 import traceback
 import time
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, abort
 from googleapiclient.discovery import build
 from google.cloud import pubsub_v1
 from Summarizer import TranscriptProcessor
@@ -15,6 +15,10 @@ import xml.etree.ElementTree as ET
 import re
 import threading
 import xmltodict
+import requests
+from functools import wraps
+import hmac
+import hashlib
 
 # Load environment variables
 load_dotenv()
@@ -40,71 +44,77 @@ def verify_webhook_token(token):
     expected_token = os.getenv('WEBHOOK_SECRET')
     return token == expected_token
 
-@app.route('/webhook', methods=['GET', 'POST'])
+def require_webhook_auth(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Check for HTTP Basic Auth
+        auth = request.authorization
+        if not auth:
+            logging.warning("No authentication provided")
+            abort(401, description="Authentication required")
+        
+        # Verify username (Superfeedr username)
+        expected_username = os.getenv('SUPERFEEDR_USERNAME', '')
+        expected_password = os.getenv('WEBHOOK_SECRET', '')
+        
+        if (not auth.username or not auth.password or 
+            auth.username != expected_username or 
+            auth.password != expected_password):
+            logging.warning(f"Invalid authentication: {auth.username}")
+            abort(401, description="Invalid credentials")
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/webhook', methods=['POST'])
 def youtube_webhook():
     """
-    Webhook endpoint for WebSub notifications and verification.
-    Strictly follows WebSub specification for verification.
+    Webhook endpoint for Superfeedr notifications.
+    Processes YouTube video notifications from JSON payload.
     """
-    # WebSub Verification Challenge (GET request)
-    if request.method == 'GET':
-        # Extract WebSub verification parameters
-        hub_mode = request.args.get('hub.mode')
-        hub_topic = request.args.get('hub.topic')
-        hub_challenge = request.args.get('hub.challenge')
-        hub_lease_seconds = request.args.get('hub.lease_seconds')
-
-        # Logging for debugging
-        logging.info(f"WebSub Verification Request:")
-        logging.info(f"Mode: {hub_mode}")
-        logging.info(f"Topic: {hub_topic}")
-        logging.info(f"Challenge: {hub_challenge}")
-        logging.info(f"Lease Seconds: {hub_lease_seconds}")
-
-        # Strict validation as per WebSub spec
-        if (hub_mode in ['subscribe', 'unsubscribe'] and 
-            hub_topic and 
-            hub_challenge):
-            # Respond exactly as specified in the spec
-            logging.info("WebSub verification challenge accepted")
-            return hub_challenge, 200
+    try:
+        # Parse incoming JSON payload
+        payload = request.get_json()
         
-        # If validation fails, return 404 as per spec
-        logging.error("Invalid WebSub verification request")
-        return 'Verification Failed', 404
-
-    # WebSub Notification Handling (POST request)
-    elif request.method == 'POST':
-        try:
-            # Log raw request details for debugging
-            logging.info(f"Notification Headers: {dict(request.headers)}")
-            logging.info(f"Notification Content Type: {request.content_type}")
+        # Log the entire payload for debugging
+        logging.info(f"Received Superfeedr payload: {payload}")
+        
+        # Verify payload structure
+        if not payload or 'items' not in payload:
+            logging.warning("Invalid or empty payload")
+            return jsonify({'status': 'error', 'message': 'Invalid payload'}), 400
+        
+        # Process each item in the payload
+        processed_videos = []
+        for item in payload['items']:
+            # Extract video URL or ID
+            video_url = item.get('permalinkUrl', '')
             
-            # Get raw request body
-            raw_body = request.get_data()
-            logging.info(f"Raw Notification Body: {raw_body.decode('utf-8', errors='ignore')}")
-            
-            # Parse XML notification
-            feed = xmltodict.parse(raw_body)
-            logging.info(f"Parsed Feed: {feed}")
-            
-            # Extract video ID and process
-            if 'feed' in feed and 'entry' in feed['feed']:
-                entry = feed['feed']['entry']
-                video_id = entry.get('yt:videoId', '')
+            # Check if it's a YouTube URL
+            if 'youtube.com' in video_url or 'youtu.be' in video_url:
+                try:
+                    # Extract video ID using existing method
+                    video_id = extract_id(video_url)
+                    
+                    if video_id:
+                        # Process the video
+                        process_video(video_id)
+                        processed_videos.append(video_id)
+                        logging.info(f"Processed video: {video_id}")
                 
-                if video_id:
-                    # Process the video
-                    process_video(video_id)
-                    return 'Notification Processed', 200
-                else:
-                    logging.warning("No video ID found in notification")
-                    return 'No Video ID', 400
-
-        except Exception as e:
-            logging.error(f"Webhook Processing Error: {e}")
-            logging.error(traceback.format_exc())
-            return 'Processing Error', 500
+                except Exception as e:
+                    logging.error(f"Error processing video {video_url}: {e}")
+        
+        # Return success response with processed video count
+        return jsonify({
+            'status': 'success', 
+            'processed_videos': processed_videos
+        }), 200
+    
+    except Exception as e:
+        logging.error(f"Webhook processing error: {e}")
+        logging.error(traceback.format_exc())
+        return jsonify({'status': 'error', 'message': 'Processing Error'}), 500
 
 @app.route('/youtube_webhook', methods=['GET', 'POST'])
 def youtube_webhook_legacy():
@@ -282,6 +292,52 @@ def extract_id(text):
         return match.group(1)
 
     return None
+
+def subscribe_to_channel(channel_id):
+    """
+    Subscribe to a YouTube channel's WebSub feed.
+    
+    Args:
+        channel_id (str): YouTube channel ID to subscribe to
+    
+    Returns:
+        bool: True if subscription was successful, False otherwise
+    """
+    callback_url = os.getenv('RENDER_URL', 'https://your-render-url.com') + '/webhook'
+    topic_url = f'https://www.youtube.com/xml/feeds/videos.xml?channel_id={channel_id}'
+    
+    data = {
+        'hub.callback': callback_url,
+        'hub.mode': 'subscribe',
+        'hub.topic': topic_url,
+        'hub.verify': 'sync',
+        'hub.verify_token': os.getenv('WEBHOOK_SECRET', '')
+    }
+    
+    try:
+        response = requests.post(
+            'https://pubsubhubbub.appspot.com/subscribe',
+            data=data
+        )
+        logging.info(f"Subscription response: {response.status_code} {response.text}")
+        return response.status_code == 202
+    except Exception as e:
+        logging.error(f"Subscription error: {e}")
+        return False
+
+@app.route('/subscribe/<channel_id>')
+def test_subscription(channel_id):
+    """
+    Test endpoint to trigger channel subscription.
+    
+    Args:
+        channel_id (str): YouTube channel ID to subscribe to
+    
+    Returns:
+        dict: Subscription result
+    """
+    success = subscribe_to_channel(channel_id)
+    return {'success': success}
 
 @app.route('/', methods=['GET'])
 def health_check():
