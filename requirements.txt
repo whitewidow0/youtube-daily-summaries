@@ -6,3 +6,4 @@ python-dotenv
 gunicorn
 youtube_transcript_api
 google-cloud-storage
+google-generativeai
