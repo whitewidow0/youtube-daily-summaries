@@ -2,157 +2,211 @@ import logging
 import os
 import json
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import TranscriptsDisabled
-from google.cloud import storage
-from google.oauth2 import service_account
 import google.generativeai as genai
+from cloud_storage import CloudStorageManager
 
 class TranscriptProcessor:
     def __init__(self, api_key=None):
         """
-        Initialize TranscriptProcessor with optional API key and comprehensive error handling
+        Initialize TranscriptProcessor with optional API key
         
         Args:
             api_key (str, optional): Gemini API key. Defaults to None.
-        
-        Raises:
-            ValueError: If no API key is found or configuration fails
         """
-        print("DEBUGGING SUMMARIZER: Initializing TranscriptProcessor")
+        # Set up logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
         
+        # Set up Gemini API key
+        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
+        
+        # Initialize Cloud Storage Manager
         try:
-            # Initialize logging with more detailed configuration
-            logging.basicConfig(
-                level=logging.DEBUG,
-                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                handlers=[
-                    logging.StreamHandler(),  # Console output
-                    logging.FileHandler('summarizer_debug.log', mode='a')  # File logging
-                ]
-            )
-            self.logger = logging.getLogger(__name__)
-            
-            # Set up Gemini API with multiple fallback methods
-            print("DEBUGGING SUMMARIZER: Setting up Gemini API")
-            
-            # Attempt to get API key from multiple sources
-            if not api_key:
-                # Priority 1: Passed argument
-                api_key = os.getenv('GEMINI_API_KEY')
-            
-            if not api_key:
-                # Priority 2: .env file
-                try:
-                    from dotenv import load_dotenv
-                    load_dotenv()
-                    api_key = os.getenv('GEMINI_API_KEY')
-                except ImportError:
-                    print("DEBUGGING SUMMARIZER: python-dotenv not installed")
-            
-            if not api_key:
-                # Priority 3: Configuration file
-                try:
-                    with open('.gemini_config.json', 'r') as config_file:
-                        config = json.load(config_file)
-                        api_key = config.get('api_key')
-                except FileNotFoundError:
-                    print("DEBUGGING SUMMARIZER: No .gemini_config.json found")
-                except json.JSONDecodeError:
-                    print("DEBUGGING SUMMARIZER: Invalid .gemini_config.json")
-            
-            if not api_key:
-                print("DEBUGGING SUMMARIZER: No API key found!")
-                raise ValueError("No Gemini API key provided. Check environment, .env, or config file.")
-            
-            # Validate API key format (basic check)
-            if len(api_key) < 10:
-                print("DEBUGGING SUMMARIZER: Invalid API key format")
-                raise ValueError("API key appears to be malformed")
-            
-            # Configure Gemini with extensive error handling
-            try:
-                genai.configure(api_key=api_key)
-                print("DEBUGGING SUMMARIZER: Gemini API configured successfully")
-                
-                # Verify API configuration
-                try:
-                    test_model = genai.GenerativeModel('gemini-pro')
-                    test_response = test_model.generate_content("Test API configuration")
-                    print("DEBUGGING SUMMARIZER: API configuration test successful")
-                except Exception as test_error:
-                    print(f"DEBUGGING SUMMARIZER: API configuration test failed - {test_error}")
-                    raise
-            
-            except Exception as config_error:
-                print(f"DEBUGGING SUMMARIZER: Gemini API configuration error - {config_error}")
-                raise
-        
+            self.cloud_storage = CloudStorageManager()
         except Exception as e:
-            print(f"DEBUGGING SUMMARIZER: Initialization Error - {e}")
-            import traceback
-            traceback.print_exc()
-            raise
+            self.logger.error(f"Failed to initialize Cloud Storage: {e}")
+            self.cloud_storage = None
+        
+        if self.api_key:
+            try:
+                genai.configure(api_key=self.api_key)
+            except Exception as e:
+                self.logger.error(f"Gemini API configuration error: {e}")
+        else:
+            self.logger.warning("No API key found for Gemini")
+
+    def get_transcript(self, video_id):
+        """
+        Retrieve transcript for a given video ID
+        
+        Args:
+            video_id (str): YouTube video ID
+        
+        Returns:
+            list: Transcript text
+        """
+        try:
+            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+            return transcript
+        except Exception as e:
+            self.logger.error(f"Error retrieving transcript for {video_id}: {e}")
+            return None
 
     def extract_transcript(self, video_id):
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        full_transcript = ' '.join([entry['text'] for entry in transcript])
-        return full_transcript
+        """
+        Extract full transcript text from video ID
+        
+        Args:
+            video_id (str): YouTube video ID
+        
+        Returns:
+            str: Full transcript text
+        """
+        transcript = self.get_transcript(video_id)
+        if transcript:
+            return ' '.join([entry['text'] for entry in transcript])
+        return None
 
     def generate_summary(self, transcript):
-        model = genai.GenerativeModel('gemini-pro')
-        summary_prompt = f"""
-        Please generate a concise, informative summary of the following transcript. 
-        Focus on the key points, main ideas, and most important information.
-        Aim for a summary that captures the essence of the content in about 3-5 sentences.
-
-        Transcript:
-        {transcript}
         """
+        Generate summary using Gemini API with a comprehensive trading analysis approach
         
-        response = model.generate_content(summary_prompt)
-        return response.text.strip()
-
-    def process_video(self, video_id):
-        transcript = self.extract_transcript(video_id)
-        summary = self.generate_summary(transcript)
-        return True  
-
-    def upload_summary_to_cloud_storage(self, video_id, summary):
-        # TO DO: Implement cloud storage upload logic
-        pass
-
-def youtube_webhook(request):
-    """
-    Webhook to process video and get a transcript/summarization.
-    
-    Args:
-        request (Request): The incoming HTTP request with video ID.
-    
-    Returns:
-        str: Response to confirm the webhook was processed.
-    """
-    try:
-        video_id = request.json.get('video_id')
-        if not video_id:
-            raise ValueError("Video ID is missing in the request.")
-
-        # Get transcript for the given video ID
-        transcript_processor = TranscriptProcessor()
-        transcript = transcript_processor.extract_transcript(video_id)
+        Args:
+            transcript (str): Full transcript text
         
-        # If transcript is retrieved, summarize it
-        summary = transcript_processor.generate_summary(transcript)
+        Returns:
+            str: Generated summary with market snapshot and trading strategy analysis
+        """
+        if not self.api_key:
+            self.logger.error("Cannot generate summary: No Gemini API key")
+            return None
 
-        # Return a response with the video ID and summary
-        return {"video_id": video_id, "summary": summary}
-    
-    except Exception as e:
-        logging.error(f"Error processing webhook: {e}")
-        return {"error": str(e)}
+        try:
+            model = genai.GenerativeModel('gemini-pro')
+            summary_prompt = f"""CRITICAL INSTRUCTIONS:
 
-# Main function to run the PubSub processor
-def main():
-    logging.basicConfig(level=logging.INFO)
+Output MUST be in TWO PARTS:
 
-if __name__ == "__main__":
-    main()
+Part 1: Current Market Snapshot
+
+Part 2: Comprehensive Trading Strategy Analysis
+
+No exceptions: If the video lacks content for one part, still generate both sections with whatever is available.
+
+Step 1: Analyze the Video Content
+
+Read the entire video transcript carefully.
+
+Identify and mark sections that mention:
+
+- Market conditions, sentiment, trends, momentum, key price levels, liquidity zones, macro events, or time-sensitive information.
+- Trading indicators, tools, methods, entry/exit rules, stop-losses, risk management, and other detailed trading strategy components.
+
+Step 2: Extract and Organize Information
+
+For Part 1 (Current Market Snapshot):
+
+Extract only explicit, time-sensitive information from the video.
+
+Include:
+- Market sentiment (e.g., extreme greed, fear).
+- Trends (e.g., bullish, bearish, consolidation).
+- Momentum (e.g., higher highs, pullbacks).
+- Key price levels (e.g., support, resistance).
+- Liquidity zones (e.g., order book data, CME gaps).
+- Macro trends/events (e.g., Federal Reserve actions, economic data).
+
+Do not include generic market commentary or assumptions.
+
+For Part 2 (Comprehensive Trading Strategy Analysis):
+
+Extract every explicit mention of trading indicators, tools, methods, and rules from the video.
+
+Include:
+- Indicators and Tools: Exact rules, calculations, and interpretations (e.g., RSI, MACD, Fibonacci extensions).
+- Key Levels and Zones: How they're defined, confirmed, and used (e.g., support/resistance, liquidity zones).
+- Trading Rules: Entries, exits, stop-losses, and position sizing (e.g., "buy above 104k with RSI confirmation").
+- Risk Management: Risk tolerance, profit protection, and psychological frameworks (e.g., "risk no more than 2% per trade").
+
+Do not include generic trading strategies or assumptions.
+
+Step 3: Structure the Output
+
+Part 1: Current Market Snapshot
+- Present the extracted content in bullet points or short paragraphs.
+- Ensure no overlap with Part 2.
+
+Part 2: Comprehensive Trading Strategy Analysis
+- Present the extracted content in bullet points or short paragraphs.
+- Use clear headings for each category (e.g., Indicators and Tools, Key Levels and Zones, Trading Rules, Risk Management).
+- Ensure no overlap with Part 1.
+
+Step 4: Quality Control
+- Double-check: Ensure only information explicitly mentioned in the video is included.
+- Remove generic content: Exclude any market or trading commentary not directly discussed in the video.
+- Flag gaps: If no explicit details exist for a section, clearly note that only minimal or no direct content was available.
+
+Video Transcript:
+{transcript}
+
+OUTPUT FORMAT:
+1. Part 1: Current Market Snapshot
+2. Part 2: Comprehensive Trading Strategy Analysis"""
+            
+            response = model.generate_content(summary_prompt)
+            return response.text.strip()
+        except Exception as e:
+            self.logger.error(f"Summary generation error: {e}")
+            return None
+
+    def process_video(self, video_id, channel_name=None, video_title=None):
+        """
+        Process video by extracting transcript and generating summary
+        
+        Args:
+            video_id (str): YouTube video ID
+            channel_name (str, optional): Name of the YouTube channel
+            video_title (str, optional): Title of the YouTube video
+        
+        Returns:
+            dict: Processing results
+        """
+        try:
+            transcript = self.extract_transcript(video_id)
+            if not transcript:
+                return {
+                    'video_id': video_id,
+                    'success': False,
+                    'error': 'Could not retrieve transcript'
+                }
+            
+            summary = self.generate_summary(transcript)
+            
+            # Upload summary to cloud storage if possible
+            cloud_url = None
+            if self.cloud_storage and summary:
+                try:
+                    cloud_url = self.cloud_storage.upload_summary(
+                        summary=summary, 
+                        channel_name=channel_name, 
+                        video_title=video_title
+                    )
+                except Exception as e:
+                    self.logger.error(f"Cloud storage upload failed: {e}")
+            
+            return {
+                'video_id': video_id,
+                'success': True,
+                'transcript': transcript,
+                'summary': summary,
+                'cloud_url': cloud_url
+            }
+        except Exception as e:
+            return {
+                'video_id': video_id,
+                'success': False,
+                'error': str(e)
+            }

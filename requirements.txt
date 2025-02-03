@@ -1,10 +1,7 @@
-requests
 flask
-google-cloud-pubsub
-google-api-python-client
-python-dotenv
-gunicorn
 youtube_transcript_api
-google-cloud-storage
+python-dotenv
 google-generativeai
-xmltodict
+google-cloud-storage
+requests
+logging

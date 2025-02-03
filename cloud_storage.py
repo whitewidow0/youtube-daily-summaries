@@ -3,7 +3,6 @@ import logging
 from datetime import datetime
 from google.cloud import storage
 from google.oauth2 import service_account
-from googleapiclient.discovery import build
 
 class CloudStorageManager:
     def __init__(self, bucket_name='youtube_summaries_daily-other_auto'):
@@ -48,22 +47,32 @@ class CloudStorageManager:
         except Exception as e:
             logging.error(f"Error initializing Cloud Storage: {e}")
             raise
-    
-    def upload_summary(self, summary, filename=None):
+
+    def upload_summary(self, summary, channel_name=None, video_title=None):
         """
         Upload summary to Google Cloud Storage
         
         Args:
             summary (str): Summary text to upload
-            filename (str, optional): Custom filename. If not provided, a default will be generated.
+            channel_name (str, optional): Name of the YouTube channel
+            video_title (str, optional): Title of the YouTube video
         
         Returns:
             str: Public URL of the uploaded summary
         """
-        # If no filename provided, use a timestamp-based default
-        if not filename:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"summaries/summary_{timestamp}.txt"
+        # Generate filename based on channel and video title
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Sanitize filenames by removing special characters and replacing spaces
+        def sanitize_filename(name):
+            if not name:
+                return "Unknown"
+            return "".join(c if c.isalnum() or c in [' ', '_', '-'] else '_' for c in name).rstrip()
+        
+        channel_safe = sanitize_filename(channel_name)
+        video_safe = sanitize_filename(video_title)
+        
+        filename = f"summaries/{channel_safe}_{video_safe}_{timestamp}.txt"
         
         try:
             blob = self.bucket.blob(filename)
@@ -75,20 +84,20 @@ class CloudStorageManager:
         except Exception as e:
             logging.error(f"Failed to upload summary: {e}")
             raise
-    
-    def list_summaries(self, channel_id=None, max_results=100):
+
+    def list_summaries(self, channel_name=None, max_results=100):
         """
         List summaries, optionally filtered by channel
         
         Args:
-            channel_id (str, optional): Filter by specific channel
+            channel_name (str, optional): Filter by specific channel
             max_results (int): Maximum number of results to return
         
         Returns:
             list: List of summary file details
         """
         try:
-            prefix = f"summaries/{channel_id}/" if channel_id else "summaries/"
+            prefix = f"summaries/{channel_name}/" if channel_name else "summaries/"
             blobs = list(self.client.list_blobs(self.bucket, prefix=prefix, max_results=max_results))
             
             return [
@@ -104,53 +113,6 @@ class CloudStorageManager:
         except Exception as e:
             logging.error(f"Error listing summaries: {e}")
             return []
-    
-    def get_channel_name(self, channel_id):
-        """
-        Retrieve channel name using YouTube Data API
-        
-        Args:
-            channel_id (str): YouTube channel ID
-        
-        Returns:
-            str: Channel name or 'Unknown Channel'
-        """
-        try:
-            # Use the same credentials path as in __init__
-            credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS', 
-                os.path.join(os.path.dirname(__file__), 'careful-hangar-446706-n7-ea19c1b519da.json')
-            )
-            
-            # Log credentials path details
-            logging.info(f"Attempting to load credentials from: {credentials_path}")
-            logging.info(f"Environment variable GOOGLE_APPLICATION_CREDENTIALS: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS', 'NOT SET')}")
-            logging.info(f"Current working directory: {os.getcwd()}")
-            logging.info(f"Script directory: {os.path.dirname(__file__)}")
-            
-            # Load credentials
-            credentials = service_account.Credentials.from_service_account_file(
-                credentials_path,
-                scopes=['https://www.googleapis.com/auth/youtube.readonly']
-            )
-            
-            # Build YouTube service
-            youtube = build('youtube', 'v3', credentials=credentials)
-            
-            # Request channel details
-            response = youtube.channels().list(
-                part='snippet',
-                id=channel_id
-            ).execute()
-            
-            if response['items']:
-                return response['items'][0]['snippet']['title']
-            
-            logging.warning(f"No channel found for ID: {channel_id}")
-            return 'Unknown Channel'
-        
-        except Exception as e:
-            logging.error(f"Error retrieving channel name: {e}")
-            return 'Unknown Channel'
 
 # Configure logging
 logging.basicConfig(
@@ -166,6 +128,7 @@ if __name__ == "__main__":
     sample_summary = "This is a test summary about an important YouTube video."
     url = storage_manager.upload_summary(
         summary=sample_summary, 
-        filename='test_summary.txt'
+        channel_name='Test Channel',
+        video_title='Test Video'
     )
     print(f"Uploaded summary URL: {url}")
