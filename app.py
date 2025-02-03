@@ -87,77 +87,84 @@ def webhook():
         })
         return "Error", 500
 
-@app.route('/youtube_webhook', methods=['POST'])
+@app.route('/youtube_webhook', methods=['GET', 'POST'])
 def youtube_webhook():
     """
-    Webhook endpoint for processing YouTube video notifications.
-    Supports both XML payload and JSON Pub/Sub messages.
+    Webhook endpoint for WebSub notifications and verification.
+    Supports verification challenge and video upload notifications.
     """
     try:
-        # Log the entire raw message for debugging
-        raw_data = request.get_data()
-        logging.debug(f"Received raw webhook data: {raw_data.decode('utf-8')}")
+        # GET: Verification Challenge
+        if request.method == 'GET':
+            hub_mode = request.args.get('hub.mode')
+            hub_topic = request.args.get('hub.topic')
+            hub_challenge = request.args.get('hub.challenge')
+            hub_lease_seconds = request.args.get('hub.lease_seconds')
 
-        # Skip processing if message is empty
-        if not raw_data:
-            logging.info("Received empty webhook message")
-            return '', 200
+            logging.info(f"WebSub Verification Request:")
+            logging.info(f"Mode: {hub_mode}")
+            logging.info(f"Topic: {hub_topic}")
+            logging.info(f"Challenge: {hub_challenge}")
+            logging.info(f"Lease Seconds: {hub_lease_seconds}")
 
-        video_id = None
-
-        # Check if it's a Pub/Sub JSON message
-        if request.is_json:
-            logging.info("Processing JSON Pub/Sub message")
-            message_data = request.get_json()
+            # Basic validation of verification parameters
+            if hub_mode == 'subscribe' and hub_challenge:
+                logging.info("WebSub subscription verification challenge received")
+                return hub_challenge, 200
             
-            # Log the full message data for debugging
-            logging.debug(f"Full JSON message: {message_data}")
-            
-            video_url = message_data.get('videoUrl')
-            if video_url:
-                video_id = extract_video_id(video_url)
-                logging.info(f"Extracted video URL: {video_url}")
-            else:
-                logging.warning("No videoUrl found in JSON message")
+            logging.error("Invalid WebSub verification request")
+            return 'Verification Failed', 400
 
-        # Check if it's an XML payload
-        elif raw_data:
-            logging.info("Processing XML payload")
-            xml_data = raw_data
-            root = ET.fromstring(xml_data)
-            namespaces = {
-                'atom': 'http://www.w3.org/2005/Atom',
-                'yt': 'http://www.youtube.com/xml/feeds/'
-            }
-            video_id_paths = [
-                './/yt:videoId',
-                './/atom:id',
-                './/id'
-            ]
-            for path in video_id_paths:
-                video_id_element = root.find(path, namespaces)
+        # POST: Notification Processing
+        if request.method == 'POST':
+            # Log the entire raw message for debugging
+            raw_data = request.get_data()
+            logging.debug(f"Received raw WebSub notification: {raw_data.decode('utf-8')}")
+
+            # Skip processing if message is empty
+            if not raw_data:
+                logging.info("Received empty WebSub notification")
+                return '', 200
+
+            # Parse XML notification
+            try:
+                root = ET.fromstring(raw_data)
+                namespaces = {
+                    'atom': 'http://www.w3.org/2005/Atom',
+                    'yt': 'http://www.youtube.com/xml/feeds/videos'
+                }
+                
+                # Extract video ID
+                video_id_element = root.find('.//yt:videoId', namespaces)
                 if video_id_element is not None and video_id_element.text:
-                    video_id = extract_id(video_id_element.text)
-                    break
+                    video_id = video_id_element.text
+                    logging.info(f"Extracted video ID from WebSub notification: {video_id}")
+                    
+                    # Process the video
+                    processed = process_video(video_id)
+                    
+                    if processed:
+                        logging.info(f"Successfully processed video from WebSub: {video_id}")
+                        return '', 200
+                    else:
+                        logging.warning(f"Failed to process video from WebSub: {video_id}")
+                        return '', 500
+                else:
+                    logging.warning("No video ID found in WebSub notification")
+                    return '', 200
 
-        # Skip processing if no video ID could be extracted
-        if not video_id:
-            logging.warning("No video ID could be extracted from the message")
-            return '', 200
-
-        logging.info(f"Processing video with ID: {video_id}")
-        processed = process_video(video_id)
-
-        if processed:
-            return jsonify({"status": "success", "video_id": video_id, "message": "Video processed successfully"}), 200
-        else:
-            logging.warning(f"Failed to process video with ID: {video_id}")
-            return jsonify({"status": "error", "video_id": video_id, "message": "Failed to process video"}), 400
+            except ET.ParseError as parse_error:
+                logging.error(f"XML Parsing Error in WebSub notification: {parse_error}")
+                return '', 400
+            except Exception as e:
+                logging.error(f"Error processing WebSub notification: {e}")
+                logging.error(traceback.format_exc())
+                return '', 500
 
     except Exception as e:
-        logging.error(f"Error processing webhook: {e}")
+        logging.error(f"Unexpected error in YouTube WebSub webhook: {e}")
         logging.error(traceback.format_exc())
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return '', 500
 
 def listen_for_pubsub_messages(project_id, subscription_id):
     """Listen for messages from Google Cloud Pub/Sub and trigger processing"""
