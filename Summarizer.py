@@ -46,13 +46,28 @@ class TranscriptProcessor:
             video_id (str): YouTube video ID
         
         Returns:
-            list: Transcript text
+            list: Transcript text or None
         """
         try:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+            # Log the video ID being processed
+            self.logger.info(f"Attempting to retrieve transcript for video ID: {video_id}")
+            
+            # Attempt to get available transcripts
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            
+            # Try to get generated transcript
+            transcript = transcript_list.find_generated_transcript(['en']).fetch()
+            
             return transcript
+        
         except Exception as e:
-            self.logger.error(f"Error retrieving transcript for {video_id}: {e}")
+            # Detailed error logging
+            self.logger.error(f"Detailed error retrieving transcript for {video_id}: {type(e).__name__} - {str(e)}")
+            
+            # If you want to see the full traceback
+            import traceback
+            self.logger.error(f"Full error traceback:\n{traceback.format_exc()}")
+            
             return None
 
     def extract_transcript(self, video_id):
