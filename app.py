@@ -102,53 +102,27 @@ def youtube_webhook():
         
         payload = request.json
         
-        # Existing webhook logic with added logging
+        # Log the received payload
         logger.info(f"Received webhook payload: {payload}")
         
-        # Extract channel details
-        channel_title = payload.get('title', 'Unknown Channel')
-        
-        # Check if items exist
-        items = payload.get('items', [])
-        if not items:
-            return jsonify({"error": "No items found in payload"}), 400
-        
-        # Get the first item
-        first_item = items[0]
-        
-        # Extract video details from standardLinks
-        standard_links = first_item.get('standardLinks', {})
-        alternate_links = standard_links.get('alternate', [])
-        
-        if not alternate_links:
-            return jsonify({"error": "No alternate links found"}), 400
-        
-        # Get the first alternate link's href
-        video_url = alternate_links[0].get('href', '')
-        video_id = extract_video_id(video_url)
-        video_title = first_item.get('title', 'Unknown Title')
-        
-        if not video_id:
-            return jsonify({"error": f"Could not extract video ID from URL: {video_url}"}), 400
-        
-        # Process the entire video
+        # Pass entire payload to Summarizer
         processing_result = summarizer.process_video(
-            video_id=video_id, 
-            channel_name=channel_title, 
-            video_title=video_title
+            video_id=payload['items'][0]['id'].split(':')[-1], 
+            channel_name=payload.get('title', 'Unknown Channel'), 
+            video_title=payload['items'][0].get('title', 'Unknown Title')
         )
         
         # Check processing result
         if not processing_result['success']:
             return jsonify({
                 "error": processing_result.get('error', 'Video processing failed'),
-                "video_id": video_id
+                "payload": payload
             }), 500
         
         return jsonify({
-            "video_id": video_id,
-            "channel": channel_title,
-            "video_title": video_title,
+            "video_id": processing_result.get('video_id'),
+            "channel": processing_result.get('channel_name'),
+            "video_title": processing_result.get('video_title'),
             "transcript_length": len(processing_result.get('transcript', '')),
             "summary_length": len(processing_result.get('summary', '')),
             "cloud_url": processing_result.get('cloud_url'),
