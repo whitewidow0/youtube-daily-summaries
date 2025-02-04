@@ -55,8 +55,8 @@ class TranscriptProcessor:
             # Attempt to get available transcripts
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
-            # Try to get auto-generated transcript
-            transcript = transcript_list.find_auto_generated_transcript(['en']).fetch()
+            # Try to get generated transcript
+            transcript = transcript_list.find_generated_transcript(['en']).fetch()
             
             return transcript
         
