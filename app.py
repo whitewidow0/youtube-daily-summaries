@@ -71,22 +71,6 @@ sys.excepthook = global_exception_handler
 
 app = Flask(__name__)
 
-def extract_video_id(href):
-    """Extract video ID from YouTube URL"""
-    import re
-    patterns = [
-        r'v=([a-zA-Z0-9_-]{11})',
-        r'youtu\.be/([a-zA-Z0-9_-]{11})',
-        r'watch\?v=([a-zA-Z0-9_-]{11})'
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, href)
-        if match:
-            return match.group(1)
-    
-    return None
-
 @app.route('/webhook', methods=['HEAD', 'POST'])
 def youtube_webhook():
     # Log details of the incoming HEAD request

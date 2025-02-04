@@ -41,27 +41,35 @@ def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, vide
     """
     try:
         # Load credentials
-        credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+        credentials_path = os.path.join(os.path.dirname(__file__), 'careful-hangar-446706-n7-eca916854bdb.json')
         
-        if not credentials_path:
-            logger.error("No Google credentials path found in environment")
+        if not os.path.exists(credentials_path):
+            credentials_path = r"C:\Users\Boris Lap\Downloads\careful-hangar-446706-n7-eca916854bdb.json"
+        
+        # Verify credentials file is readable
+        try:
+            with open(credentials_path, 'r') as f:
+                credentials_content = f.read(100)  # Read first 100 chars to verify
+        except Exception as read_error:
             return None
         
+        # Load credentials with full error details
         try:
-            credentials = service_account.Credentials.from_service_account_file(
-                credentials_path,
-                scopes=['https://www.googleapis.com/auth/cloud-platform']
-            )
-            
-            # Initialize storage client
-            try:
-                client = storage.Client(credentials=credentials)
-            except Exception as client_error:
-                logger.error(f"Storage client initialization error: {client_error}")
-                return None
+            with open(credentials_path, 'r') as f:
+                credentials_json = json.load(f)
+        except json.JSONDecodeError as json_error:
+            return None
         
-        except Exception as credentials_error:
-            logger.error(f"Credentials loading error: {credentials_error}")
+        credentials = service_account.Credentials.from_service_account_file(
+            credentials_path,
+            scopes=['https://www.googleapis.com/auth/cloud-platform']
+        )
+        
+        # Initialize storage client with explicit project
+        try:
+            project_id = credentials_json.get('project_id')
+            client = storage.Client(project=project_id, credentials=credentials)
+        except Exception as client_error:
             return None
         
         # Define bucket name
@@ -69,7 +77,7 @@ def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, vide
         
         # List buckets with alternative method
         try:
-            storage_client = storage.Client(credentials=credentials)
+            storage_client = storage.Client(project=project_id, credentials=credentials)
             buckets = list(storage_client.list_buckets())
             if not buckets:
                 print("No buckets found in the project.")
