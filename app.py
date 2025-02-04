@@ -7,7 +7,7 @@ import datetime
 import time
 import threading
 from flask import Flask, request, jsonify
-from Summarizer import TranscriptProcessor
+from Summarizer import process_video_from_payload
 
 # Enhanced Logging Setup
 def setup_logging():
@@ -69,9 +69,6 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 # Set the global exception handler
 sys.excepthook = global_exception_handler
 
-# Initialize summarizer
-summarizer = TranscriptProcessor()
-
 app = Flask(__name__)
 
 def extract_video_id(href):
@@ -92,50 +89,15 @@ def extract_video_id(href):
 
 @app.route('/webhook', methods=['HEAD', 'POST'])
 def youtube_webhook():
-    try:
-        # Log details of the incoming HEAD request
-        if request.method == 'HEAD':
-            logger.info(f"HEAD request received - Headers: {dict(request.headers)}")
-            logger.info(f"HEAD request - Remote Address: {request.remote_addr}")
-            logger.info(f"HEAD request - User Agent: {request.headers.get('User-Agent', 'No User-Agent')}")
-            return '', 200
-        
-        payload = request.json
-        
-        # Log the received payload
-        logger.info(f"Received webhook payload: {payload}")
-        
-        # Pass entire payload to Summarizer
-        processing_result = summarizer.process_video(
-            video_id=payload['items'][0]['id'].split(':')[-1], 
-            channel_name=payload.get('title', 'Unknown Channel'), 
-            video_title=payload['items'][0].get('title', 'Unknown Title')
-        )
-        
-        # Check processing result
-        if not processing_result['success']:
-            return jsonify({
-                "error": processing_result.get('error', 'Video processing failed'),
-                "payload": payload
-            }), 500
-        
-        return jsonify({
-            "video_id": processing_result.get('video_id'),
-            "channel": processing_result.get('channel_name'),
-            "video_title": processing_result.get('video_title'),
-            "transcript_length": len(processing_result.get('transcript', '')),
-            "summary_length": len(processing_result.get('summary', '')),
-            "cloud_url": processing_result.get('cloud_url'),
-            "full_result": processing_result
-        }), 200
+    # Log details of the incoming HEAD request
+    if request.method == 'HEAD':
+        logger.info(f"HEAD request received - Headers: {dict(request.headers)}")
+        logger.info(f"HEAD request - Remote Address: {request.remote_addr}")
+        logger.info(f"HEAD request - User Agent: {request.headers.get('User-Agent', 'No User-Agent')}")
+        return '', 200
     
-    except Exception as e:
-        logger.error(f"Webhook processing error: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'status': 'error',
-            'message': 'Failed to process webhook'
-        }), 500
+    payload = request.json
+    return process_video_from_payload(payload)
 
 @app.route('/health', methods=['GET'])
 def health_check():

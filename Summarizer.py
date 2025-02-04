@@ -3,106 +3,156 @@ import os
 import json
 from youtube_transcript_api import YouTubeTranscriptApi
 import google.generativeai as genai
-from cloud_storage import CloudStorageManager
+from datetime import datetime
+from google.cloud import storage
+from google.oauth2 import service_account
+import sys
 
-class TranscriptProcessor:
-    def __init__(self, api_key=None):
-        """
-        Initialize TranscriptProcessor with optional API key
-        
-        Args:
-            api_key (str, optional): Gemini API key. Defaults to None.
-        """
-        # Set up logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        self.logger = logging.getLogger(__name__)
-        
-        # Set up Gemini API key
-        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
-        
-        # Initialize Cloud Storage Manager
-        try:
-            self.cloud_storage = CloudStorageManager()
-        except Exception as e:
-            self.logger.error(f"Failed to initialize Cloud Storage: {e}")
-            self.cloud_storage = None
-        
-        if self.api_key:
-            try:
-                genai.configure(api_key=self.api_key)
-            except Exception as e:
-                self.logger.error(f"Gemini API configuration error: {e}")
-        else:
-            self.logger.warning("No API key found for Gemini")
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,  # Set to DEBUG to capture all log messages
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),  # Add stdout handler to ensure logs are printed
+        logging.FileHandler('cloud_storage_debug.log')  # Optional: also log to a file
+    ]
+)
+logger = logging.getLogger(__name__)
 
-    def get_transcript(self, video_id):
-        """
-        Retrieve transcript for a given video ID
+# Configure Gemini API
+api_key = os.getenv('GEMINI_API_KEY')
+if api_key:
+    genai.configure(api_key=api_key)
+else:
+    logger.warning("No API key found for Gemini")
+
+def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, video_title=None):
+    """
+    Upload summary to Google Cloud Storage
+    
+    Args:
+        summary_text (str): Summary text to upload
+        video_id (str, optional): YouTube video ID
+        channel_name (str, optional): Name of the YouTube channel
+        video_title (str, optional): Title of the YouTube video
+    
+    Returns:
+        str: Public URL of the uploaded summary or None
+    """
+    try:
+        # Load credentials
+        credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
         
-        Args:
-            video_id (str): YouTube video ID
-        
-        Returns:
-            list: Transcript text or None
-        """
-        try:
-            # Log the video ID being processed
-            self.logger.info(f"Attempting to retrieve transcript for video ID: {video_id}")
-            
-            # Attempt to get available transcripts
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-            
-            # Log available transcript languages
-            available_transcripts = [t for t in transcript_list.transcripts]
-            self.logger.info(f"Available transcripts: {[t.language_code for t in available_transcripts]}")
-            
-            # Try to get generated transcript
-            transcript = transcript_list.find_generated_transcript(['en']).fetch()
-            
-            return transcript
-        
-        except Exception as e:
-            # Detailed error logging
-            self.logger.error(f"Detailed error retrieving transcript for {video_id}: {type(e).__name__} - {str(e)}")
-            
-            # If you want to see the full traceback
-            import traceback
-            self.logger.error(f"Full error traceback:\n{traceback.format_exc()}")
-            
+        if not credentials_path:
+            logger.error("No Google credentials path found in environment")
             return None
-
-    def extract_transcript(self, video_id):
-        """
-        Extract full transcript text from video ID
         
-        Args:
-            video_id (str): YouTube video ID
+        try:
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_path,
+                scopes=['https://www.googleapis.com/auth/cloud-platform']
+            )
+            
+            # Initialize storage client
+            try:
+                client = storage.Client(credentials=credentials)
+            except Exception as client_error:
+                logger.error(f"Storage client initialization error: {client_error}")
+                return None
         
-        Returns:
-            str: Full transcript text
-        """
-        transcript = self.get_transcript(video_id)
-        if transcript:
-            return ' '.join([entry['text'] for entry in transcript])
+        except Exception as credentials_error:
+            logger.error(f"Credentials loading error: {credentials_error}")
+            return None
+        
+        # Define bucket name
+        bucket_name = 'youtube_summaries_daily-other_auto'
+        
+        # List buckets with alternative method
+        try:
+            storage_client = storage.Client(credentials=credentials)
+            buckets = list(storage_client.list_buckets())
+            if not buckets:
+                print("No buckets found in the project.")
+            else:
+                print("Available buckets:")
+                for bucket in buckets:
+                    print(f"- {bucket.name}")
+                if bucket_name not in [b.name for b in buckets]:
+                    print(f"WARNING: Bucket '{bucket_name}' not found in the project.")
+        except Exception as list_error:
+            import traceback
+            traceback.print_exc()
+        
+        # Verify bucket exists
+        try:
+            bucket = client.bucket(bucket_name)
+            bucket.reload()  # This will raise an error if bucket doesn't exist
+        except Exception as bucket_error:
+            return None
+        
+        # Sanitize filenames
+        def sanitize_filename(name):
+            if not name:
+                return "Unknown"
+            return "".join(c if c.isalnum() or c in [' ', '_', '-'] else '_' for c in name).rstrip()
+        
+        channel_safe = sanitize_filename(channel_name)
+        video_safe = sanitize_filename(video_title)
+        timestamp = datetime.now().strftime("%Y%m%d")
+        
+        filename = f"{channel_safe}_{video_safe}_{timestamp}.txt"
+        
+        # Upload file
+        try:
+            blob = bucket.blob(filename)
+            blob.upload_from_string(summary_text, content_type='text/plain')
+            blob.make_public()
+            print(f"Summary uploaded to cloud: {filename}")
+            return blob.public_url
+        except Exception as upload_error:
+            logger.error(f"Cloud storage upload error: {upload_error}")
+            return None
+    
+    except Exception as e:
+        logger.error(f"Unexpected cloud storage error: {e}")
         return None
 
-    def generate_summary(self, transcript):
-        """
-        Generate summary using Gemini API with a comprehensive trading analysis approach
+def process_video_from_payload(payload):
+    """
+    Comprehensive video processing function that handles everything from 
+    extracting video ID to uploading summary to cloud storage.
+    
+    Args:
+        payload (dict): Superfeedr webhook payload
+    
+    Returns:
+        dict: Processing results with success status, video details, and summary
+    """
+    try:
+        # Extract video details from payload
+        video_id = payload['items'][0]['id'].split(':')[-1]
+        channel_name = payload.get('title', 'Unknown Channel')
+        video_title = payload['items'][0].get('title', 'Unknown Title')
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
         
-        Args:
-            transcript (str): Full transcript text
+        # Log processing start
+        logger.info(f"Processing video: {video_title} from {channel_name}")
         
-        Returns:
-            str: Generated summary with market snapshot and trading strategy analysis
-        """
-        if not self.api_key:
-            self.logger.error("Cannot generate summary: No Gemini API key")
-            return None
-
+        # Retrieve transcript
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            transcript_obj = transcript_list.find_generated_transcript(['en']).fetch()
+            transcript_text = ' '.join([entry['text'] for entry in transcript_obj])
+        except Exception as transcript_error:
+            logger.error(f"Transcript retrieval error: {transcript_error}")
+            return {
+                'success': False,
+                'video_id': video_id,
+                'error': 'Could not retrieve transcript',
+                'payload': payload
+            }
+        
+        # Generate summary using Gemini
         try:
             model = genai.GenerativeModel('gemini-pro')
             summary_prompt = f"""CRITICAL INSTRUCTIONS:
@@ -169,63 +219,62 @@ Step 4: Quality Control
 - Flag gaps: If no explicit details exist for a section, clearly note that only minimal or no direct content was available.
 
 Video Transcript:
-{transcript}
+{transcript_text}
 
 OUTPUT FORMAT:
 1. Part 1: Current Market Snapshot
 2. Part 2: Comprehensive Trading Strategy Analysis"""
             
-            response = model.generate_content(summary_prompt)
-            return response.text.strip()
-        except Exception as e:
-            self.logger.error(f"Summary generation error: {e}")
-            return None
+            summary_response = model.generate_content(summary_prompt)
+            summary_text = summary_response.text.strip()
+        except Exception as summary_error:
+            logger.error(f"Summary generation error: {summary_error}")
+            summary_text = "Unable to generate summary"
+        
+        # Upload to cloud storage
+        cloud_url = upload_to_cloud_storage(summary_text, video_id, channel_name, video_title)
+        
+        # Prepare and return processing result
+        return {
+            'success': True,
+            'video_id': video_id,
+            'channel_name': channel_name,
+            'video_title': video_title,
+            'video_url': video_url,
+            'transcript': transcript_text,
+            'summary': summary_text,
+            'cloud_url': cloud_url,
+            'payload': payload
+        }
+    
+    except Exception as e:
+        logger.error(f"Unexpected error processing video: {e}")
+        return {
+            'success': False,
+            'error': str(e),
+            'payload': payload
+        }
 
-    def process_video(self, video_id, channel_name=None, video_title=None):
-        """
-        Process video by extracting transcript and generating summary
-        
-        Args:
-            video_id (str): YouTube video ID
-            channel_name (str, optional): Name of the YouTube channel
-            video_title (str, optional): Title of the YouTube video
-        
-        Returns:
-            dict: Processing results
-        """
-        try:
-            transcript = self.extract_transcript(video_id)
-            if not transcript:
-                return {
-                    'video_id': video_id,
-                    'success': False,
-                    'error': 'Could not retrieve transcript'
-                }
-            
-            summary = self.generate_summary(transcript)
-            
-            # Upload summary to cloud storage if possible
-            cloud_url = None
-            if self.cloud_storage and summary:
-                try:
-                    cloud_url = self.cloud_storage.upload_summary(
-                        summary=summary, 
-                        channel_name=channel_name, 
-                        video_title=video_title
-                    )
-                except Exception as e:
-                    self.logger.error(f"Cloud storage upload failed: {e}")
-            
-            return {
-                'video_id': video_id,
-                'success': True,
-                'transcript': transcript,
-                'summary': summary,
-                'cloud_url': cloud_url
-            }
-        except Exception as e:
-            return {
-                'video_id': video_id,
-                'success': False,
-                'error': str(e)
-            }
+# Test the function if script is run directly
+if __name__ == '__main__':
+    # Example payload similar to Superfeedr webhook
+    test_payload = {
+        'title': 'Crypto Cobra',
+        'items': [{
+            'id': 'yt:video:I38uVbXGymA',
+            'title': 'Bitcoin just hit the MOST Important Level! Do Not Miss THIS Move!',
+            'published': 1738603337,
+            'updated': 1738603700,
+            'permalinkUrl': 'https://www.youtube.com/watch?v=I38uVbXGymA'
+        }]
+    }
+    
+    # Run the processing function
+    print("Starting video processing...")
+    result = process_video_from_payload(test_payload)
+    
+    # Print the result with full details
+    import json
+    print("\n--- FULL PROCESSING RESULT ---")
+    print(json.dumps(result, indent=2))
+    print("\n--- END OF PROCESSING RESULT ---")
