@@ -55,6 +55,10 @@ class TranscriptProcessor:
             # Attempt to get available transcripts
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
+            # Log available transcript languages
+            available_transcripts = [t for t in transcript_list.transcripts]
+            self.logger.info(f"Available transcripts: {[t.language_code for t in available_transcripts]}")
+            
             # Try to get generated transcript
             transcript = transcript_list.find_generated_transcript(['en']).fetch()
             
