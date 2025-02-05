@@ -104,7 +104,7 @@ def create_retry_session(retries=5, backoff_factor=1,
     retry_strategy = Retry(
         total=retries,
         status_forcelist=status_forcelist,
-        method_whitelist=["GET", "POST"],
+        allowed_methods=["GET", "POST"],
         backoff_factor=backoff_factor
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
