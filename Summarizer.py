@@ -1,12 +1,13 @@
 import logging
 import os
 import json
-from youtube_transcript_api import YouTubeTranscriptApi
 import google.generativeai as genai
 from datetime import datetime
 from google.cloud import storage
 from google.oauth2 import service_account
 import sys
+import requests
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 
 # Configure logging
 logging.basicConfig(
@@ -26,20 +27,156 @@ if api_key:
 else:
     logger.warning("No API key found for Gemini")
 
-def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, video_title=None):
+# Configure Proxy
+def configure_proxy():
+    proxy = os.getenv('PROXY_URL')
+    if proxy:
+        logger.info(f"Setting proxy: {proxy}")
+        # Setting the proxy for HTTP and HTTPS requests
+        proxies = {
+            'http': proxy,
+            'https': proxy,
+        }
+        return proxies
+    return None
+
+# Proxy for YouTube Transcript API
+proxies = configure_proxy()
+
+def process_video_from_payload(payload):
     """
-    Upload summary to Google Cloud Storage
+    Comprehensive video processing function that handles everything from 
+    extracting video ID to uploading summary to cloud storage.
     
     Args:
-        summary_text (str): Summary text to upload
-        video_id (str, optional): YouTube video ID
-        channel_name (str, optional): Name of the YouTube channel
-        video_title (str, optional): Title of the YouTube video
+        payload (dict): Superfeedr webhook payload
     
     Returns:
-        str: Public URL of the uploaded summary or None
+        dict: Processing results with success status, video details, and summary
     """
     try:
+        # Extract video details from payload
+        video_id = payload['items'][0]['id'].split(':')[-1]
+        channel_name = payload.get('title', 'Unknown Channel')
+        video_title = payload['items'][0].get('title', 'Unknown Title')
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        # Log processing start
+        logger.info(f"Processing video: {video_title} from {channel_name}")
+        
+        # Retrieve transcript
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id, proxies=proxies)
+            transcript_obj = transcript_list.find_generated_transcript(['en']).fetch()
+            transcript_text = ' '.join([entry['text'] for entry in transcript_obj])
+        except Exception as transcript_error:
+            logger.error(f"Transcript retrieval error for video {video_id}: {transcript_error}")
+            
+            # More detailed error categorization
+            if "NoTranscriptFound" in str(transcript_error):
+                logger.warning(f"No transcript available for video: {video_id}")
+                return {
+                    'success': False,
+                    'video_id': video_id,
+                    'error': 'No transcript available',
+                    'payload': payload
+                }
+            
+            if "Forbidden" in str(transcript_error):
+                logger.warning(f"Transcript access forbidden for video: {video_id}")
+                return {
+                    'success': False,
+                    'video_id': video_id,
+                    'error': 'Transcript access forbidden',
+                    'payload': payload
+                }
+            
+            # Generic fallback for other transcript errors
+            return {
+                'success': False,
+                'video_id': video_id,
+                'error': f'Transcript retrieval failed: {str(transcript_error)}',
+                'payload': payload
+            }
+        
+        # Generate summary using Gemini
+        try:
+            model = genai.GenerativeModel('gemini-pro')
+            summary_prompt = f"""CRITICAL INSTRUCTIONS:
+
+Output MUST be in TWO PARTS:
+
+Part 1: Current Market Snapshot
+Part 2: Comprehensive Trading Strategy Analysis
+
+No exceptions: If the video lacks content for one part, still generate both sections with whatever is available.
+
+Step 1: Analyze the Video Content
+
+Read the entire video transcript carefully.
+
+Identify and mark sections that mention:
+
+- Market conditions, sentiment, trends, momentum, key price levels, liquidity zones, macro events, or time-sensitive information.
+- Trading indicators, tools, methods, entry/exit rules, stop-losses, risk management, and other detailed trading strategy components.
+
+Step 2: Extract and Organize Information
+
+For Part 1 (Current Market Snapshot):
+
+Extract only explicit, time-sensitive information from the video.
+
+Include:
+- Market sentiment (e.g., extreme greed, fear).
+- Trends (e.g., bullish, bearish, consolidation).
+- Momentum (e.g., higher highs, pullbacks).
+- Key price levels (e.g., support, resistance).
+- Liquidity zones (e.g., order book data, CME gaps).
+- Macro trends/events (e.g., Federal Reserve actions, economic data).
+
+Do not include generic market commentary or assumptions.
+
+For Part 2 (Comprehensive Trading Strategy Analysis):
+
+Extract every explicit mention of trading indicators, tools, methods, and rules from the video.
+
+Include:
+- Indicators and Tools: Exact rules, calculations, and interpretations (e.g., RSI, MACD, Fibonacci extensions).
+- Key Levels and Zones: How they're defined, confirmed, and used (e.g., support/resistance, liquidity zones).
+- Trading Rules: Entries, exits, stop-losses, and position sizing (e.g., "buy above 104k with RSI confirmation").
+- Risk Management: Risk tolerance, profit protection, and psychological frameworks (e.g., "risk no more than 2% per trade").
+
+Do not include generic trading strategies or assumptions.
+
+Step 3: Structure the Output
+
+Part 1: Current Market Snapshot
+- Present the extracted content in bullet points or short paragraphs.
+- Ensure no overlap with Part 2.
+
+Part 2: Comprehensive Trading Strategy Analysis
+- Present the extracted content in bullet points or short paragraphs.
+- Use clear headings for each category (e.g., Indicators and Tools, Key Levels and Zones, Trading Rules, Risk Management).
+- Ensure no overlap with Part 1.
+
+Step 4: Quality Control
+- Double-check: Ensure only information explicitly mentioned in the video is included.
+- Remove generic content: Exclude any market or trading commentary not directly discussed in the video.
+- Flag gaps: If no explicit details exist for a section, clearly note that only minimal or no direct content was available.
+
+Video Transcript:
+{transcript_text}
+
+OUTPUT FORMAT:
+1. Part 1: Current Market Snapshot
+2. Part 2: Comprehensive Trading Strategy Analysis"""
+            
+            summary_response = model.generate_content(summary_prompt)
+            summary_text = summary_response.text.strip()
+        except Exception as summary_error:
+            logger.error(f"Summary generation error: {summary_error}")
+            summary_text = "Unable to generate summary"
+        
         # Load credentials
         credentials_path = os.path.join(os.path.dirname(__file__), 'careful-hangar-446706-n7-eca916854bdb.json')
         
@@ -119,152 +256,10 @@ def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, vide
             blob.upload_from_string(summary_text, content_type='text/plain')
             blob.make_public()
             logger.info(f"Summary uploaded to cloud: {filename}")
-            return blob.public_url
+            cloud_url = blob.public_url
         except Exception as upload_error:
             logger.error(f"Cloud storage upload error: {upload_error}")
-            return None
-    
-    except Exception as e:
-        logger.error(f"Unexpected cloud storage error: {e}")
-        return None
-
-def process_video_from_payload(payload):
-    """
-    Comprehensive video processing function that handles everything from 
-    extracting video ID to uploading summary to cloud storage.
-    
-    Args:
-        payload (dict): Superfeedr webhook payload
-    
-    Returns:
-        dict: Processing results with success status, video details, and summary
-    """
-    try:
-        # Extract video details from payload
-        video_id = payload['items'][0]['id'].split(':')[-1]
-        channel_name = payload.get('title', 'Unknown Channel')
-        video_title = payload['items'][0].get('title', 'Unknown Title')
-        video_url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        # Log processing start
-        logger.info(f"Processing video: {video_title} from {channel_name}")
-        
-        # Retrieve transcript
-        try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-            transcript_obj = transcript_list.find_generated_transcript(['en']).fetch()
-            transcript_text = ' '.join([entry['text'] for entry in transcript_obj])
-        except Exception as transcript_error:
-            logger.error(f"Transcript retrieval error for video {video_id}: {transcript_error}")
-            
-            # More detailed error categorization
-            if "NoTranscriptFound" in str(transcript_error):
-                logger.warning(f"No transcript available for video: {video_id}")
-                return {
-                    'success': False,
-                    'video_id': video_id,
-                    'error': 'No transcript available',
-                    'payload': payload
-                }
-            
-            if "Forbidden" in str(transcript_error):
-                logger.warning(f"Transcript access forbidden for video: {video_id}")
-                return {
-                    'success': False,
-                    'video_id': video_id,
-                    'error': 'Transcript access forbidden',
-                    'payload': payload
-                }
-            
-            # Generic fallback for other transcript errors
-            return {
-                'success': False,
-                'video_id': video_id,
-                'error': f'Transcript retrieval failed: {str(transcript_error)}',
-                'payload': payload
-            }
-        
-        # Generate summary using Gemini
-        try:
-            model = genai.GenerativeModel('gemini-pro')
-            summary_prompt = f"""CRITICAL INSTRUCTIONS:
-
-Output MUST be in TWO PARTS:
-
-Part 1: Current Market Snapshot
-
-Part 2: Comprehensive Trading Strategy Analysis
-
-No exceptions: If the video lacks content for one part, still generate both sections with whatever is available.
-
-Step 1: Analyze the Video Content
-
-Read the entire video transcript carefully.
-
-Identify and mark sections that mention:
-
-- Market conditions, sentiment, trends, momentum, key price levels, liquidity zones, macro events, or time-sensitive information.
-- Trading indicators, tools, methods, entry/exit rules, stop-losses, risk management, and other detailed trading strategy components.
-
-Step 2: Extract and Organize Information
-
-For Part 1 (Current Market Snapshot):
-
-Extract only explicit, time-sensitive information from the video.
-
-Include:
-- Market sentiment (e.g., extreme greed, fear).
-- Trends (e.g., bullish, bearish, consolidation).
-- Momentum (e.g., higher highs, pullbacks).
-- Key price levels (e.g., support, resistance).
-- Liquidity zones (e.g., order book data, CME gaps).
-- Macro trends/events (e.g., Federal Reserve actions, economic data).
-
-Do not include generic market commentary or assumptions.
-
-For Part 2 (Comprehensive Trading Strategy Analysis):
-
-Extract every explicit mention of trading indicators, tools, methods, and rules from the video.
-
-Include:
-- Indicators and Tools: Exact rules, calculations, and interpretations (e.g., RSI, MACD, Fibonacci extensions).
-- Key Levels and Zones: How they're defined, confirmed, and used (e.g., support/resistance, liquidity zones).
-- Trading Rules: Entries, exits, stop-losses, and position sizing (e.g., "buy above 104k with RSI confirmation").
-- Risk Management: Risk tolerance, profit protection, and psychological frameworks (e.g., "risk no more than 2% per trade").
-
-Do not include generic trading strategies or assumptions.
-
-Step 3: Structure the Output
-
-Part 1: Current Market Snapshot
-- Present the extracted content in bullet points or short paragraphs.
-- Ensure no overlap with Part 2.
-
-Part 2: Comprehensive Trading Strategy Analysis
-- Present the extracted content in bullet points or short paragraphs.
-- Use clear headings for each category (e.g., Indicators and Tools, Key Levels and Zones, Trading Rules, Risk Management).
-- Ensure no overlap with Part 1.
-
-Step 4: Quality Control
-- Double-check: Ensure only information explicitly mentioned in the video is included.
-- Remove generic content: Exclude any market or trading commentary not directly discussed in the video.
-- Flag gaps: If no explicit details exist for a section, clearly note that only minimal or no direct content was available.
-
-Video Transcript:
-{transcript_text}
-
-OUTPUT FORMAT:
-1. Part 1: Current Market Snapshot
-2. Part 2: Comprehensive Trading Strategy Analysis"""
-            
-            summary_response = model.generate_content(summary_prompt)
-            summary_text = summary_response.text.strip()
-        except Exception as summary_error:
-            logger.error(f"Summary generation error: {summary_error}")
-            summary_text = "Unable to generate summary"
-        
-        # Upload to cloud storage
-        cloud_url = upload_to_cloud_storage(summary_text, video_id, channel_name, video_title)
+            cloud_url = None
         
         # Prepare and return processing result
         return {
@@ -278,7 +273,6 @@ OUTPUT FORMAT:
             'cloud_url': cloud_url,
             'payload': payload
         }
-    
     except Exception as e:
         logger.error(f"Unexpected error processing video: {e}")
         return {
