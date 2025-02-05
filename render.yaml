@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: youtube-daily-summaries
+    env: python
+    buildCommand: |
+      python -m pip install --upgrade pip
+      pip install --upgrade -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false
