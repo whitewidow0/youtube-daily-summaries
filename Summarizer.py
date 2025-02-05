@@ -152,11 +152,32 @@ def process_video_from_payload(payload):
             transcript_obj = transcript_list.find_generated_transcript(['en']).fetch()
             transcript_text = ' '.join([entry['text'] for entry in transcript_obj])
         except Exception as transcript_error:
-            logger.error(f"Transcript retrieval error: {transcript_error}")
+            logger.error(f"Transcript retrieval error for video {video_id}: {transcript_error}")
+            
+            # More detailed error categorization
+            if "NoTranscriptFound" in str(transcript_error):
+                logger.warning(f"No transcript available for video: {video_id}")
+                return {
+                    'success': False,
+                    'video_id': video_id,
+                    'error': 'No transcript available',
+                    'payload': payload
+                }
+            
+            if "Forbidden" in str(transcript_error):
+                logger.warning(f"Transcript access forbidden for video: {video_id}")
+                return {
+                    'success': False,
+                    'video_id': video_id,
+                    'error': 'Transcript access forbidden',
+                    'payload': payload
+                }
+            
+            # Generic fallback for other transcript errors
             return {
                 'success': False,
                 'video_id': video_id,
-                'error': 'Could not retrieve transcript',
+                'error': f'Transcript retrieval failed: {str(transcript_error)}',
                 'payload': payload
             }
         
