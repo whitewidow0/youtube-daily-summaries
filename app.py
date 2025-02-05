@@ -9,6 +9,9 @@ import threading
 from flask import Flask, request, jsonify
 from io import StringIO
 from Summarizer import process_video_from_payload
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Enhanced Logging Setup
 def setup_logging():
@@ -83,16 +86,61 @@ sys.excepthook = global_exception_handler
 
 app = Flask(__name__)
 
+# Network request retry configuration
+def create_retry_session(retries=5, backoff_factor=1, 
+                          status_forcelist=[500, 502, 503, 504]):
+    """
+    Create a requests session with retry mechanism.
+    
+    Args:
+        retries (int): Number of total retries
+        backoff_factor (float): Backoff multiplier between attempts
+        status_forcelist (list): HTTP status codes to retry on
+    
+    Returns:
+        requests.Session: Configured session with retry mechanism
+    """
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=retries,
+        status_forcelist=status_forcelist,
+        method_whitelist=["GET", "POST"],
+        backoff_factor=backoff_factor
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+# Global retry session
+network_session = create_retry_session()
+
 # Input validation for payload data
 def validate_payload(payload):
     if not isinstance(payload, dict):
         logger.warning("Invalid payload format: Expected a dictionary")
         return False
-    required_keys = ['video_id', 'title', 'url']  # Example required keys
+    
+    # Check for required top-level keys
+    required_keys = ['title', 'items']
     for key in required_keys:
         if key not in payload:
             logger.warning(f"Missing required key: {key}")
             return False
+    
+    # Check items structure
+    if not payload['items'] or not isinstance(payload['items'], list):
+        logger.warning("Payload items must be a non-empty list")
+        return False
+    
+    # Check first item has required keys
+    first_item = payload['items'][0]
+    item_required_keys = ['id', 'title', 'permalinkUrl']
+    for key in item_required_keys:
+        if key not in first_item:
+            logger.warning(f"Missing required item key: {key}")
+            return False
+    
     return True
 
 @app.route('/webhook', methods=['HEAD', 'POST'])

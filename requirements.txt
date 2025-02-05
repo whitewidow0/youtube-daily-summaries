@@ -4,5 +4,6 @@ python-dotenv
 google-generativeai
 google-cloud-storage
 requests
+urllib3
 logging
 gunicorn
