@@ -7,6 +7,7 @@ import datetime
 import time
 import threading
 from flask import Flask, request, jsonify
+from io import StringIO
 from Summarizer import process_video_from_payload
 
 # Enhanced Logging Setup
@@ -15,7 +16,7 @@ def setup_logging():
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, 'application.log')
     
-    # Configure logging with rotation
+    # Configure logging with rotation for file logs
     handler = RotatingFileHandler(
         log_file, 
         maxBytes=10*1024*1024,  # 10 MB
@@ -28,14 +29,25 @@ def setup_logging():
     )
     handler.setFormatter(formatter)
     
-    # Root logger configuration
+    # Root logger configuration for file logs
     logging.getLogger().addHandler(handler)
-    logging.getLogger().setLevel(logging.INFO)
-    
+
+    # Stream handler to print to stdout for Render logs
+    stream_handler = logging.StreamHandler(sys.stdout)  # Log to stdout for Render
+    stream_handler.setFormatter(formatter)
+    logging.getLogger().addHandler(stream_handler)
+
+    logging.getLogger().setLevel(logging.DEBUG)  # Set the log level to DEBUG or INFO
     return logging.getLogger(__name__)
 
 # Global logger
 logger = setup_logging()
+
+# In-memory log capture (Optional)
+log_stream = StringIO()
+log_stream_handler = logging.StreamHandler(log_stream)
+log_stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(log_stream_handler)
 
 # Global error handler
 def global_exception_handler(exc_type, exc_value, exc_traceback):
@@ -71,6 +83,18 @@ sys.excepthook = global_exception_handler
 
 app = Flask(__name__)
 
+# Input validation for payload data
+def validate_payload(payload):
+    if not isinstance(payload, dict):
+        logger.warning("Invalid payload format: Expected a dictionary")
+        return False
+    required_keys = ['video_id', 'title', 'url']  # Example required keys
+    for key in required_keys:
+        if key not in payload:
+            logger.warning(f"Missing required key: {key}")
+            return False
+    return True
+
 @app.route('/webhook', methods=['HEAD', 'POST'])
 def youtube_webhook():
     # Log details of the incoming HEAD request
@@ -81,7 +105,20 @@ def youtube_webhook():
         return '', 200
     
     payload = request.json
-    return process_video_from_payload(payload)
+    logger.debug(f"Incoming payload: {payload}")  # Log payload at debug level
+    
+    # Input validation - print warnings if invalid but continue
+    if not validate_payload(payload):
+        logger.warning("Invalid payload received, continuing processing with limited information.")
+    
+    try:
+        # Process the payload with video summary
+        result = process_video_from_payload(payload)
+        logger.debug(f"Processed payload result: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Error processing video payload: {e}")
+        return jsonify({'error': 'Failed to process payload'}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():

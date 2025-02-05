@@ -51,6 +51,7 @@ def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, vide
             with open(credentials_path, 'r') as f:
                 credentials_content = f.read(100)  # Read first 100 chars to verify
         except Exception as read_error:
+            logger.error(f"Error reading credentials file: {read_error}")
             return None
         
         # Load credentials with full error details
@@ -58,6 +59,7 @@ def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, vide
             with open(credentials_path, 'r') as f:
                 credentials_json = json.load(f)
         except json.JSONDecodeError as json_error:
+            logger.error(f"Error parsing credentials file: {json_error}")
             return None
         
         credentials = service_account.Credentials.from_service_account_file(
@@ -70,6 +72,7 @@ def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, vide
             project_id = credentials_json.get('project_id')
             client = storage.Client(project=project_id, credentials=credentials)
         except Exception as client_error:
+            logger.error(f"Error initializing storage client: {client_error}")
             return None
         
         # Define bucket name
@@ -80,22 +83,22 @@ def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, vide
             storage_client = storage.Client(project=project_id, credentials=credentials)
             buckets = list(storage_client.list_buckets())
             if not buckets:
-                print("No buckets found in the project.")
+                logger.warning("No buckets found in the project.")
             else:
-                print("Available buckets:")
+                logger.info("Available buckets:")
                 for bucket in buckets:
-                    print(f"- {bucket.name}")
+                    logger.info(f"- {bucket.name}")
                 if bucket_name not in [b.name for b in buckets]:
-                    print(f"WARNING: Bucket '{bucket_name}' not found in the project.")
+                    logger.warning(f"Bucket '{bucket_name}' not found in the project.")
         except Exception as list_error:
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error listing buckets: {list_error}")
         
         # Verify bucket exists
         try:
             bucket = client.bucket(bucket_name)
             bucket.reload()  # This will raise an error if bucket doesn't exist
         except Exception as bucket_error:
+            logger.error(f"Error accessing bucket '{bucket_name}': {bucket_error}")
             return None
         
         # Sanitize filenames
@@ -115,7 +118,7 @@ def upload_to_cloud_storage(summary_text, video_id=None, channel_name=None, vide
             blob = bucket.blob(filename)
             blob.upload_from_string(summary_text, content_type='text/plain')
             blob.make_public()
-            print(f"Summary uploaded to cloud: {filename}")
+            logger.info(f"Summary uploaded to cloud: {filename}")
             return blob.public_url
         except Exception as upload_error:
             logger.error(f"Cloud storage upload error: {upload_error}")
@@ -280,30 +283,6 @@ OUTPUT FORMAT:
         logger.error(f"Unexpected error processing video: {e}")
         return {
             'success': False,
-            'error': str(e),
+            'error': f'Unexpected error: {e}',
             'payload': payload
         }
-
-# Test the function if script is run directly
-if __name__ == '__main__':
-    # Example payload similar to Superfeedr webhook
-    test_payload = {
-        'title': 'Crypto Cobra',
-        'items': [{
-            'id': 'yt:video:I38uVbXGymA',
-            'title': 'Bitcoin just hit the MOST Important Level! Do Not Miss THIS Move!',
-            'published': 1738603337,
-            'updated': 1738603700,
-            'permalinkUrl': 'https://www.youtube.com/watch?v=I38uVbXGymA'
-        }]
-    }
-    
-    # Run the processing function
-    print("Starting video processing...")
-    result = process_video_from_payload(test_payload)
-    
-    # Print the result with full details
-    import json
-    print("\n--- FULL PROCESSING RESULT ---")
-    print(json.dumps(result, indent=2))
-    print("\n--- END OF PROCESSING RESULT ---")
